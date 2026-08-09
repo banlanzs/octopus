@@ -68,8 +68,10 @@ func TestClaudeCodeThinkingConfigReachesDeepSeek(t *testing.T) {
 
 // TestClaudeCodeThinkingHistoryPassedBackToDeepSeek verifies that when Claude
 // Code sends the assistant thinking block from a previous turn back in the
-// history, octopus preserves it as `reasoning_content` on the OpenAI-compatible
-// wire so DeepSeek's thinking-mode contract holds.
+// history, octopus re-materializes it as a `content[].thinking` block (with
+// signature) on the OpenAI-compatible wire — the contract DeepSeek's thinking
+// mode requires for multi-turn replay
+// ("The content[].thinking in the thinking mode must be passed back to the API").
 func TestClaudeCodeThinkingHistoryPassedBackToDeepSeek(t *testing.T) {
 	anthropicBody := `{
 		"model": "deepseek-chat",
@@ -106,12 +108,28 @@ func TestClaudeCodeThinkingHistoryPassedBackToDeepSeek(t *testing.T) {
 		t.Fatalf("messages field missing")
 	}
 	assistant := msgs[len(msgs)-1].(map[string]any)
-	reasoning, ok := assistant["reasoning_content"].(string)
-	if !ok || reasoning == "" {
-		t.Fatalf("reasoning_content not passed back to DeepSeek - assistant message: %v", assistant)
+	content, ok := assistant["content"].([]any)
+	if !ok {
+		t.Fatalf("expected content array with thinking block, got: %v", assistant)
 	}
-	if reasoning != "let me think" {
-		t.Fatalf("reasoning_content mismatch: got %q, want %q", reasoning, "let me think")
+	sawThinking := false
+	for _, c := range content {
+		block, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if block["type"] == "thinking" {
+			sawThinking = true
+			if block["thinking"] != "let me think" {
+				t.Fatalf("thinking block text mismatch: %v", block)
+			}
+			if block["signature"] != "sig-123" {
+				t.Fatalf("thinking block signature lost: %v", block)
+			}
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("content[].thinking not passed back to DeepSeek - assistant message: %v", assistant)
 	}
 }
 

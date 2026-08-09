@@ -124,6 +124,23 @@ func (o *MessagesOutbound) TransformResponse(ctx context.Context, response *http
 		return nil, fmt.Errorf("response body is empty")
 	}
 
+	// 中转站可能以 200 状态码返回 {"error": {...}}：按失败处理以触发重试。
+	var errResp struct {
+		Error struct {
+			Message string `json:"message"`
+			Status  string `json:"status"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
+		return nil, &model.ResponseError{
+			StatusCode: response.StatusCode,
+			Detail: model.ErrorDetail{
+				Message: errResp.Error.Message,
+				Type:    errResp.Error.Status,
+			},
+		}
+	}
+
 	var geminiResp model.GeminiGenerateContentResponse
 	if err := json.Unmarshal(body, &geminiResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal gemini response: %w", err)

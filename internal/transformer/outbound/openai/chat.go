@@ -80,9 +80,18 @@ type ChatCompletionsAudio struct {
 }
 
 func (o *ChatOutbound) TransformRequest(ctx context.Context, request *model.InternalLLMRequest, baseUrl, key string) (*http.Request, error) {
+	// DeepSeek thinking mode 要求多轮对话把 assistant 的 thinking 内容连同
+	// signature 以 content[].thinking 块形式原样回传，否则上游 400
+	// ("The content[].thinking in the thinking mode must be passed back to the API")。
+	// 必须放在 ClearHelpFields 之前：ReasoningBlocks/ReasoningSignature 是
+	// json:"-" 帮助字段，会被 ClearHelpFields 清空。
+	materializeDeepSeekThinkingBlocks(request)
 	request.ClearHelpFields()
 	request.NormalizeMessages()
 	request.FlattenUnsupportedBlocks(model.AlternationProviderOpenAI)
+	// 非 DeepSeek 的 OpenAI 标准 Chat 不接受 thinking/redacted_thinking 块，
+	// 剥离以免被上游拒绝。
+	stripOpenAIUnsupportedThinkingBlocks(request)
 
 	// developer role is preserved as-is on OpenAI outbound (O-L5). OpenAI
 	// 2025+ model spec treats "developer" as the canonical instruction
@@ -221,7 +230,33 @@ func buildChatCompletionsRequest(request *model.InternalLLMRequest) *ChatComplet
 		}
 	}
 
+	// `thinking` 参数是 DeepSeek 特有（见 model.ThinkingConfig 注释）；OpenAI/xAI
+	// 等 OpenAI 兼容上游不识别该字段。其余模型的思考意图通过 reasoning_effort
+	// 表达：剥离 DeepSeek thinking 的同时，把 Anthropic 的 effort 值
+	// （low/medium/high/xhigh/max）归一化为 OpenAI 兼容的 low/medium/high，
+	// 避免不识别值被上游整体忽略而静默关闭思考（能力大减）。
+	if !isDeepSeekTarget(request) {
+		result.Thinking = nil
+		result.ReasoningEffort = normalizeReasoningEffort(result.ReasoningEffort)
+	}
+
 	return result
+}
+
+// normalizeReasoningEffort 把 Anthropic 的 effort 值（low/medium/high/xhigh/max）
+// 归一化为 OpenAI 兼容上游（o*/gpt-5/grok 等）识别的 low/medium/high。
+// 未知值保守回退 high，保证思考不被削弱。
+func normalizeReasoningEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "", "low", "medium", "high":
+		return effort
+	case "minimal":
+		return "low"
+	case "xhigh", "max":
+		return "high"
+	default:
+		return "high"
+	}
 }
 
 // isReasoningChatModel 判断 Chat Completions 端的模型是否属于推理系列
@@ -265,6 +300,19 @@ func (o *ChatOutbound) TransformResponse(ctx context.Context, response *http.Res
 		return nil, fmt.Errorf("response body is empty")
 	}
 
+	// 中转站可能以 200 状态码返回 {"error": {...}}：此时必须按失败处理，
+	// 否则错误结果会被当作成功返回给客户端，且无法触发重试。
+	// 与 TransformStream 保持一致，用独立的 ErrorDetail 探测结构解析。
+	var errCheck struct {
+		Error *model.ErrorDetail `json:"error"`
+	}
+	if err := json.Unmarshal(body, &errCheck); err == nil && errCheck.Error != nil && errCheck.Error.Message != "" {
+		return nil, &model.ResponseError{
+			StatusCode: response.StatusCode,
+			Detail:     *errCheck.Error,
+		}
+	}
+
 	var resp model.InternalLLMResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
@@ -301,4 +349,127 @@ func (o *ChatOutbound) TransformStreamEvent(ctx context.Context, eventData []byt
 		return nil, err
 	}
 	return model.StreamEventsFromInternalResponse(stream), nil
+}
+
+// === DeepSeek thinking-mode replay helpers ===
+
+// isDeepSeekModel 判断目标模型是否属于 DeepSeek 系列。
+func isDeepSeekModel(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	return name != "" && strings.Contains(name, "deepseek")
+}
+
+// isDeepSeekTarget 判断目标是否按 DeepSeek thinking 语义处理：
+// 模型名含 "deepseek"，或渠道显式开启 ForceDeepSeekThinking（中转站 DeepSeek 别名）。
+func isDeepSeekTarget(request *model.InternalLLMRequest) bool {
+	return request != nil && (isDeepSeekModel(request.Model) || request.ForceDeepSeekThinking)
+}
+
+// materializeDeepSeekThinkingBlocks 把 assistant 历史消息中的 thinking
+// （ReasoningBlocks / ReasoningContent）重组为 content[].thinking 块回传。
+// DeepSeek thinking mode 契约要求多轮对话时把 assistant 的 thinking 连同
+// signature 原样回传，否则上游返回 400
+// ("The content[].thinking in the thinking mode must be passed back to the API")。
+// 若消息已携带 content[].thinking 块（客户端按契约回传），则原样保留。
+func materializeDeepSeekThinkingBlocks(request *model.InternalLLMRequest) {
+	if request == nil || !isDeepSeekTarget(request) {
+		return
+	}
+	// 显式禁用 thinking 时无需（也不应）回传 thinking 块。
+	if request.Thinking != nil && request.Thinking.Type == "disabled" {
+		return
+	}
+	for i := range request.Messages {
+		msg := &request.Messages[i]
+		if msg.Role != "assistant" {
+			continue
+		}
+		thinkingParts := deepSeekThinkingParts(msg)
+		if len(thinkingParts) == 0 {
+			// 消息无 reasoning 信息：保留现状。若客户端已按契约回传
+			// content[].thinking 块（OpenAI round-trip 路径），字段保留即可。
+			continue
+		}
+		parts := append(thinkingParts, deepSeekTextParts(msg)...)
+		msg.Content = model.MessageContent{MultipleContent: parts}
+		// thinking 以块形式回传后，不再输出顶层 reasoning_content，避免重复/歧义。
+		msg.ReasoningContent = nil
+		msg.Reasoning = nil
+		msg.ReasoningSignature = nil
+		msg.ReasoningBlocks = nil
+	}
+}
+
+// deepSeekThinkingParts 从消息的 ReasoningBlocks / ReasoningContent 构建
+// content[].thinking 与 redacted_thinking 块。
+func deepSeekThinkingParts(msg *model.Message) []model.MessageContentPart {
+	var parts []model.MessageContentPart
+	for _, rb := range msg.ReasoningBlocks {
+		switch rb.Kind {
+		case model.ReasoningBlockKindThinking:
+			parts = append(parts, model.MessageContentPart{
+				Type:      "thinking",
+				Thinking:  strOrNil(rb.Text),
+				Signature: strOrNil(rb.Signature),
+			})
+		case model.ReasoningBlockKindRedacted:
+			parts = append(parts, model.MessageContentPart{
+				Type:             "redacted_thinking",
+				RedactedThinking: strOrNil(rb.Data),
+			})
+		}
+	}
+	if msg.ReasoningContent != nil && *msg.ReasoningContent != "" {
+		parts = append(parts, model.MessageContentPart{
+			Type:      "thinking",
+			Thinking:  msg.ReasoningContent,
+			Signature: msg.ReasoningSignature,
+		})
+	}
+	return parts
+}
+
+// deepSeekTextParts 提取消息原有文本/图片等内容作为 content 块。
+func deepSeekTextParts(msg *model.Message) []model.MessageContentPart {
+	var parts []model.MessageContentPart
+	if msg.Content.Content != nil && *msg.Content.Content != "" {
+		text := *msg.Content.Content
+		parts = append(parts, model.MessageContentPart{Type: "text", Text: &text})
+	}
+	for _, p := range msg.Content.MultipleContent {
+		switch p.Type {
+		case "text", "image_url", "input_audio":
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
+// stripOpenAIUnsupportedThinkingBlocks 对非 DeepSeek 的 OpenAI Chat 出站剥离
+// thinking/redacted_thinking 内容块（OpenAI 标准 Chat 不接受这些块类型）。
+func stripOpenAIUnsupportedThinkingBlocks(request *model.InternalLLMRequest) {
+	if request == nil || isDeepSeekTarget(request) {
+		return
+	}
+	for i := range request.Messages {
+		msg := &request.Messages[i]
+		if len(msg.Content.MultipleContent) == 0 {
+			continue
+		}
+		filtered := msg.Content.MultipleContent[:0]
+		for _, p := range msg.Content.MultipleContent {
+			if p.Type == "thinking" || p.Type == "redacted_thinking" {
+				continue
+			}
+			filtered = append(filtered, p)
+		}
+		msg.Content.MultipleContent = filtered
+	}
+}
+
+func strOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

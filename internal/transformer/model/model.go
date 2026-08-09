@@ -252,6 +252,11 @@ type InternalLLMRequest struct {
 	// Ref: https://api-docs.deepseek.com/guides/thinking_mode
 	Thinking *ThinkingConfig `json:"thinking,omitempty"`
 
+	// ForceDeepSeekThinking 由渠道配置注入：强制按 DeepSeek thinking 语义处理
+	// （保留 `thinking` 参数、重组 content[].thinking 块回传）。用于中转站
+	// DeepSeek 模型名不含 "deepseek" 的渠道。
+	ForceDeepSeekThinking bool `json:"-"`
+
 	// Specifies the processing type used for serving the request.
 	ServiceTier *string `json:"service_tier,omitempty"`
 
@@ -1003,6 +1008,21 @@ type MessageContentPart struct {
 	Type string `json:"type"`
 	// Text is the text content, required when type is "text"
 	Text *string `json:"text,omitempty"`
+
+	// Thinking is the thinking-mode content (DeepSeek `content[].thinking`
+	// block, OpenAI Responses reasoning). Carried verbatim so multi-turn
+	// requests can replay it to the upstream without 400 errors.
+	Thinking *string `json:"thinking,omitempty"`
+
+	// Signature accompanies a thinking block (DeepSeek / Anthropic / Gemini 3).
+	// Must be replayed verbatim on follow-up turns or the upstream rejects
+	// the request with signature_mismatch / must-be-passed-back errors.
+	Signature *string `json:"signature,omitempty"`
+
+	// RedactedThinking mirrors Anthropic's redacted_thinking block (opaque
+	// data, no visible text). Preserved for replay to Anthropic-compatible
+	// upstreams.
+	RedactedThinking *string `json:"redacted_thinking,omitempty"`
 
 	// ImageURL is the image URL content, required when type is "image_url"
 	ImageURL *ImageURL `json:"image_url,omitempty"`

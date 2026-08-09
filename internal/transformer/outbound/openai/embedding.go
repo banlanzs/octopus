@@ -95,6 +95,17 @@ func (o *EmbeddingOutbound) TransformResponse(ctx context.Context, response *htt
 		return nil, fmt.Errorf("response body is empty")
 	}
 
+	// 中转站可能以 200 状态码返回 {"error": {...}}：按失败处理以触发重试。
+	var errResp struct {
+		Error model.ErrorDetail `json:"error"`
+	}
+	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
+		return nil, &model.ResponseError{
+			StatusCode: response.StatusCode,
+			Detail:     errResp.Error,
+		}
+	}
+
 	// 先解析为 OpenAI 标准格式
 	var openAIResp OpenAIEmbeddingResponse
 	if err := json.Unmarshal(body, &openAIResp); err != nil {

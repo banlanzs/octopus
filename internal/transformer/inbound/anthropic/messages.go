@@ -642,6 +642,24 @@ func (i *MessagesInbound) TransformResponse(ctx context.Context, response *model
 								Text: part.Text,
 							})
 						}
+					case "thinking":
+						// DeepSeek thinking-mode 响应以 content[].thinking 块返回，
+						// 需转成 Anthropic thinking 块，Claude Code 才能存储并在
+						// 下一轮回传给上游（否则上游 400）。
+						if part.Thinking != nil && *part.Thinking != "" {
+							contentBlocks = append(contentBlocks, MessageContentBlock{
+								Type:      "thinking",
+								Thinking:  part.Thinking,
+								Signature: part.Signature,
+							})
+						}
+					case "redacted_thinking":
+						if part.RedactedThinking != nil && *part.RedactedThinking != "" {
+							contentBlocks = append(contentBlocks, MessageContentBlock{
+								Type: "redacted_thinking",
+								Data: *part.RedactedThinking,
+							})
+						}
 					case "image_url":
 						if part.ImageURL != nil && part.ImageURL.URL != "" {
 							// Convert OpenAI image format to Anthropic format

@@ -274,6 +274,21 @@ func (o *MessageOutbound) TransformResponse(ctx context.Context, response *http.
 		return nil, fmt.Errorf("response body is empty")
 	}
 
+	// 中转站可能以 200 状态码返回 {"error": {...}}：此时必须按失败处理，
+	// 否则错误结果会被当作成功返回给客户端，且无法触发重试。
+	if response.StatusCode < 400 {
+		var errResp anthropicModel.AnthropicError
+		if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
+			return nil, &model.ResponseError{
+				StatusCode: response.StatusCode,
+				Detail: model.ErrorDetail{
+					Message: errResp.Error.Message,
+					Type:    errResp.Error.Type,
+				},
+			}
+		}
+	}
+
 	// Check for error response
 	if response.StatusCode >= 400 {
 		var errResp anthropicModel.AnthropicError
