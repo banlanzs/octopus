@@ -12,3 +12,12 @@ docs/
 CONTEXT.md
 .impeccable.md
 MEMORY.md
+
+# Temporary go test logs
+.gotest*.log
+
+# Local request debugging logs
+request-logs/
+
+# Local TODO scratchpad (not versioned)
+TODO.md
