@@ -766,6 +766,22 @@ func convertToAnthropicRequest(req *model.InternalLLMRequest) *anthropicModel.Me
 				Display:      req.ThinkingDisplay,
 			}
 		}
+	} else if req.Thinking != nil {
+		// Direct DeepSeek `thinking` passthrough (set by the Anthropic inbound when
+		// the client used thinking.type=disabled or a budget-less config): rebuild
+		// the Anthropic thinking block so the same-protocol standard path does not
+		// silently drop it. enabled/adaptive carry ReasoningEffort and are handled
+		// above; this branch primarily preserves explicit "disabled".
+		switch req.Thinking.Type {
+		case "disabled":
+			result.Thinking = &anthropicModel.Thinking{Type: anthropicModel.ThinkingTypeDisabled}
+		case "enabled":
+			result.Thinking = &anthropicModel.Thinking{
+				Type:         anthropicModel.ThinkingTypeEnabled,
+				BudgetTokens: getThinkingBudget(req.ReasoningEffort, req.ReasoningBudget),
+				Display:      req.ThinkingDisplay,
+			}
+		}
 	}
 
 	// A-H4: Anthropic rejects temperature != 1 and any top_p/top_k when

@@ -698,3 +698,95 @@ func TestAnthropicServerToolBeta(t *testing.T) {
 		}
 	}
 }
+
+// TestTransformRequestPreservesDisabledThinking verifies the same-protocol
+// (Anthropic→Anthropic) standard transform path rebuilds an explicit
+// thinking.type=disabled block. The Anthropic inbound now surfaces disabled
+// thinking via the DeepSeek ThinkingConfig field (ReasoningEffort is empty for
+// disabled), and the outbound must not drop it — otherwise DeepSeek's Anthropic
+// endpoint silently reverts to enabled thinking.
+func TestTransformRequestPreservesDisabledThinking(t *testing.T) {
+	outbound := &MessageOutbound{}
+	maxTokens := int64(16)
+	req := &model.InternalLLMRequest{
+		Model:     "deepseek-chat",
+		MaxTokens: &maxTokens,
+		Thinking:  &model.ThinkingConfig{Type: "disabled"},
+		Messages: []model.Message{
+			{Role: "user", Content: model.MessageContent{Content: stringPtr("hello")}},
+		},
+	}
+
+	httpReq, err := outbound.TransformRequest(context.Background(), req, "https://api.deepseek.com/v1", "sk-test")
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+
+	var payload anthropicModel.MessageRequest
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	if payload.Thinking == nil {
+		t.Fatalf("thinking block was dropped by Anthropic→Anthropic transform: %s", body)
+	}
+	if payload.Thinking.Type != anthropicModel.ThinkingTypeDisabled {
+		t.Fatalf("expected thinking.type=disabled, got %q", payload.Thinking.Type)
+	}
+}
+
+// TestTransformRequestPreservesThinkingBlocksForDeepSeek verifies that assistant
+// thinking blocks in the history survive the Anthropic→Anthropic transform path
+// so multi-turn DeepSeek Anthropic-endpoint requests keep the
+// "content[].thinking must be passed back" contract.
+func TestTransformRequestPreservesThinkingBlocksForDeepSeek(t *testing.T) {
+	outbound := &MessageOutbound{}
+	maxTokens := int64(16)
+	req := &model.InternalLLMRequest{
+		Model:     "deepseek-chat",
+		MaxTokens: &maxTokens,
+		Messages: []model.Message{
+			{Role: "user", Content: model.MessageContent{Content: stringPtr("hello")}},
+			{
+				Role:             "assistant",
+				ReasoningContent: stringPtr("let me think"),
+				Content:          model.MessageContent{Content: stringPtr("hello to you")},
+			},
+		},
+	}
+
+	httpReq, err := outbound.TransformRequest(context.Background(), req, "https://api.deepseek.com/v1", "sk-test")
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+
+	var payload anthropicModel.MessageRequest
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	assistant := payload.Messages[len(payload.Messages)-1]
+	blocks := assistant.Content.MultipleContent
+	if len(blocks) == 0 {
+		t.Fatalf("assistant message has no content blocks: %s", body)
+	}
+	sawThinking := false
+	for _, b := range blocks {
+		if b.Type == "thinking" {
+			sawThinking = true
+			if b.Thinking == nil || *b.Thinking != "let me think" {
+				t.Fatalf("thinking block text mismatch: %+v", b)
+			}
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("thinking block lost in Anthropic→Anthropic transform: %s", body)
+	}
+}
+

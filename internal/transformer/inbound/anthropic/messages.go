@@ -427,7 +427,13 @@ func (i *MessagesInbound) TransformRequest(ctx context.Context, body []byte) (*m
 		}
 	}
 
-	// Convert thinking configuration to reasoning effort and preserve budget
+	// Convert thinking configuration to reasoning effort and preserve budget.
+	// Thinking is also surfaced on the DeepSeek `thinking` parameter so that
+	// OpenAI-compatible channels reaching DeepSeek keep the thinking-mode
+	// contract (enabled/adaptive → enabled, disabled → disabled). Without this
+	// the parameter is silently dropped and DeepSeek either never enters
+	// thinking mode or rejects follow-up turns with
+	// "The reasoning_content in the thinking mode must be passed back".
 	if anthropicReq.Thinking != nil {
 		if anthropicReq.Thinking.Display != "" {
 			chatReq.ThinkingDisplay = anthropicReq.Thinking.Display
@@ -440,6 +446,7 @@ func (i *MessagesInbound) TransformRequest(ctx context.Context, body []byte) (*m
 			} else {
 				log.Warnf("thinking type is 'enabled' but budget_tokens is nil, thinking will be ignored")
 			}
+			chatReq.Thinking = &model.ThinkingConfig{Type: "enabled"}
 		case ThinkingTypeAdaptive:
 			effort := EffortHigh
 			if anthropicReq.OutputConfig != nil && anthropicReq.OutputConfig.Effort != "" {
@@ -447,8 +454,12 @@ func (i *MessagesInbound) TransformRequest(ctx context.Context, body []byte) (*m
 			}
 			chatReq.ReasoningEffort = effort
 			chatReq.AdaptiveThinking = true
+			// DeepSeek has no adaptive mode; map to enabled so thinking is not lost.
+			chatReq.Thinking = &model.ThinkingConfig{Type: "enabled"}
 		case ThinkingTypeDisabled:
-			// Explicitly disabled, nothing to do
+			// Explicitly disabled: keep reasoning_effort clear and surface the
+			// DeepSeek disabled parameter so the model does not think.
+			chatReq.Thinking = &model.ThinkingConfig{Type: "disabled"}
 		default:
 			log.Warnf("unknown thinking type: %s", anthropicReq.Thinking.Type)
 		}
