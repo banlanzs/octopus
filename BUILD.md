@@ -12,7 +12,27 @@
 
 ## 构建 octopus.exe
 
-### 完整构建（前端 + 后端打包）
+### 快速构建（推荐）
+
+项目根目录提供 `Makefile`，一条命令完成完整构建：
+
+```bash
+make build
+```
+
+产物输出到 `build/bin/octopus`（Windows 平台为 `build/bin/octopus.exe`）。
+
+### 分步构建
+
+```bash
+# 1. 构建前端（SSG 静态导出）
+make build-frontend
+
+# 2. 编译 Go 二进制（带版本信息）
+make build-backend
+```
+
+### 手动构建
 
 ```bash
 # 1. 构建前端（SSG 静态导出）
