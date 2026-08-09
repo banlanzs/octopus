@@ -76,6 +76,7 @@ export type Channel = {
     ws_mode: ChannelWSMode;
     param_override?: string | null;
     match_regex?: string | null;
+    force_deep_seek_thinking?: boolean;
     managed: boolean;
     managed_source?: ManagedChannelSource | null;
     stats: StatsChannel;
@@ -107,6 +108,7 @@ export type CreateChannelRequest = {
     ws_mode?: ChannelWSMode;
     param_override?: string | null;
     match_regex?: string | null;
+    force_deep_seek_thinking?: boolean;
 };
 
 /**
@@ -128,6 +130,7 @@ export type UpdateChannelRequest = {
     ws_mode?: ChannelWSMode;
     param_override?: string | null;
     match_regex?: string | null;
+    force_deep_seek_thinking?: boolean;
     // keys diff
     keys_to_add?: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
     keys_to_update?: Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string }>;

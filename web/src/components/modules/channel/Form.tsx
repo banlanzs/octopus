@@ -40,6 +40,7 @@ export interface ChannelFormData {
     custom_model: string;
     enabled: boolean;
     auto_sync: boolean;
+    force_deep_seek_thinking: boolean;
     auto_group: AutoGroupType;
     match_regex: string;
 }
@@ -595,6 +596,13 @@ export function ChannelForm({
                             onCheckedChange={(checked) => onFormDataChange({ ...formData, auto_sync: checked })}
                         />
                         <span className="text-sm text-card-foreground">{t('autoSync')}</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                        <Switch
+                            checked={formData.force_deep_seek_thinking}
+                            onCheckedChange={(checked) => onFormDataChange({ ...formData, force_deep_seek_thinking: checked })}
+                        />
+                        <span className="text-sm text-card-foreground">{t('forceDeepSeekThinking')}</span>
                     </label>
                 </div>
             </div>

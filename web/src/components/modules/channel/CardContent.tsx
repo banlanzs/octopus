@@ -60,6 +60,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         model: channel.model,
         custom_model: channel.custom_model,
         auto_sync: channel.auto_sync,
+        force_deep_seek_thinking: channel.force_deep_seek_thinking ?? false,
         auto_group: channel.auto_group,
         match_regex: channel.match_regex ?? '',
     });
@@ -98,6 +99,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
             req.proxy_config_id = formData.proxy_mode === 'pool' ? formData.proxy_config_id : null;
         }
         if (formData.auto_sync !== channel.auto_sync) req.auto_sync = formData.auto_sync;
+        if (formData.force_deep_seek_thinking !== (channel.force_deep_seek_thinking ?? false)) req.force_deep_seek_thinking = formData.force_deep_seek_thinking;
         if (formData.auto_group !== channel.auto_group) req.auto_group = formData.auto_group;
         if ((formData.ws_mode ?? 'inherit') !== (channel.ws_mode ?? 'inherit')) req.ws_mode = formData.ws_mode;
 

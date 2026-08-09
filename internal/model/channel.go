@@ -76,7 +76,11 @@ type Channel struct {
 	CustomHeader  []CustomHeader        `json:"custom_header" gorm:"serializer:json"`
 	WSMode        ChannelWSMode         `json:"ws_mode" gorm:"type:varchar(16);not null;default:'inherit'"`
 	ParamOverride *string               `json:"param_override"`
-	ChannelProxy  *string               `json:"-" gorm:"column:channel_proxy"`
+	// ForceDeepSeekThinking 强制把 Anthropic thinking 语义透传为 DeepSeek `thinking`
+	// 参数并重组 content[].thinking 块回传。用于中转站 DeepSeek 模型名不含
+	// "deepseek" 的渠道（否则会被当作普通 OpenAI 兼容模型剥离 thinking）。
+	ForceDeepSeekThinking bool `json:"force_deep_seek_thinking" gorm:"default:false"`
+	ChannelProxy          *string `json:"-" gorm:"column:channel_proxy"`
 	Stats         *StatsChannel         `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
 	MatchRegex    *string               `json:"match_regex"`
 	Managed       bool                  `json:"managed" gorm:"-"`
@@ -154,6 +158,8 @@ type ChannelUpdateRequest struct {
 	ChannelProxy  *string                `json:"-"`
 	ParamOverride *string                `json:"param_override,omitempty"`
 	MatchRegex    *string                `json:"match_regex,omitempty"`
+	// ForceDeepSeekThinking 强制启用 DeepSeek `thinking` 参数透传（中转站 DeepSeek 别名渠道）。
+	ForceDeepSeekThinking *bool `json:"force_deep_seek_thinking,omitempty"`
 
 	KeysToAdd    []ChannelKeyAddRequest    `json:"keys_to_add,omitempty"`
 	KeysToUpdate []ChannelKeyUpdateRequest `json:"keys_to_update,omitempty"`
