@@ -40,15 +40,24 @@ type RelayMetrics struct {
 	BillInputTokens      *int
 	CacheReadTokens      *int
 	CacheWriteTokens     *int
+
+	// ReasoningEffort 记录本次请求的推理强度（reasoning_effort / output_config.effort 值）。
+	// 从 InternalRequest 提取，供日志页展示。
+	ReasoningEffort string
 }
 
 func NewRelayMetrics(apiKeyID int, requestModel string, rawBody []byte, req *transformerModel.InternalLLMRequest) *RelayMetrics {
+	effort := ""
+	if req != nil {
+		effort = req.ReasoningEffort
+	}
 	return &RelayMetrics{
 		APIKeyID:        apiKeyID,
 		RequestModel:    requestModel,
 		StartTime:       time.Now(),
 		RawRequest:      rawBody,
 		InternalRequest: req,
+		ReasoningEffort: effort,
 	}
 }
 
@@ -253,6 +262,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 	relayLog.BillInputTokens = m.BillInputTokens
 	relayLog.CacheReadTokens = m.CacheReadTokens
 	relayLog.CacheWriteTokens = m.CacheWriteTokens
+	relayLog.ReasoningEffort = m.ReasoningEffort
 	relayLog.WSMode = m.WSMode
 	relayLog.WSExecMode = m.WSExecMode
 	relayLog.WSRecovery = m.WSRecovery

@@ -391,6 +391,46 @@ function WSModeBadge({ log }: { log: RelayLog }) {
     );
 }
 
+// getEffortMeta 返回推理强度的展示元数据（标签 + 配色）。
+// effort 为空（请求未指定推理强度）时返回 null，不展示 badge。
+function getEffortMeta(effort: string | null | undefined) {
+    switch ((effort ?? '').toLowerCase()) {
+        case 'max':
+            return { label: 'MAX', className: 'bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400' };
+        case 'xhigh':
+            return { label: 'XHIGH', className: 'bg-violet-500/15 text-violet-600 dark:text-violet-400' };
+        case 'high':
+            return { label: 'HIGH', className: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400' };
+        case 'medium':
+            return { label: 'MED', className: 'bg-sky-500/15 text-sky-600 dark:text-sky-400' };
+        case 'low':
+            return { label: 'LOW', className: 'bg-slate-500/15 text-slate-600 dark:text-slate-400' };
+        default:
+            return null;
+    }
+}
+
+function EffortBadge({ log }: { log: RelayLog }) {
+    const t = useTranslations('log.card');
+    const meta = getEffortMeta(log.reasoning_effort);
+    if (!meta) return null;
+
+    return (
+        <Tooltip>
+            <TooltipTrigger asChild>
+                <Badge
+                    variant="secondary"
+                    className={cn('shrink-0 gap-1 px-1.5 py-0 text-[10px] font-semibold uppercase tracking-wide', meta.className)}
+                >
+                    <Zap className="size-3 shrink-0" />
+                    {t('reasoningEffort')} {meta.label}
+                </Badge>
+            </TooltipTrigger>
+            <TooltipContent>{t('reasoningEffort')} {meta.label}</TooltipContent>
+        </Tooltip>
+    );
+}
+
 function DeferredJsonContent({ content, fallbackText, isLoading }: { content: string | undefined; fallbackText: string; isLoading?: boolean }) {
     const { resolvedTheme } = useTheme();
     const { isOpen } = useMorphingDialog();
@@ -675,7 +715,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                 </div>
                                 <WSModeBadge log={log} />
                             </div>
-                            <div className="grid grid-cols-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1fr)] gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground">
+                            <div className="grid grid-cols-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1fr)_auto] gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground">
                                 <div className="flex items-center gap-1.5">
                                     <Clock className="size-3.5 shrink-0" style={{ color: brandColor }} />
                                     <span>{formatTime(log.time)}</span>
@@ -717,6 +757,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                         {t('cost')} {Number(log.cost).toFixed(6)}
                                     </span>
                                 </div>
+                                <EffortBadge log={log} />
                             </div>
                             {hasError ? (
                                 <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 overflow-hidden">
@@ -992,6 +1033,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                     {t('cost')}: {Number(log.cost).toFixed(6)}
                                 </span>
                             </div>
+                            <EffortBadge log={log} />
                         </div>
                     </MorphingDialogContent>
                 </MorphingDialogContainer>

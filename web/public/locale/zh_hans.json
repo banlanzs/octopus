@@ -780,7 +780,8 @@
             "transportInput": "传输输入",
             "billInput": "计费输入",
             "cacheRead": "缓存读取",
-            "cacheWrite": "缓存写入"
+            "cacheWrite": "缓存写入",
+            "reasoningEffort": "推理强度"
         },
         "filters": {
             "keywordPlaceholder": "搜索模型、API Key 或内容",

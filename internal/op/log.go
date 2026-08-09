@@ -704,6 +704,7 @@ func selectRelayLogListFields(query *gorm.DB, includeContent bool) *gorm.DB {
 		"cost",
 		"error",
 		"success",
+		"reasoning_effort",
 		"attempts",
 		"total_attempts",
 		"used_ws",

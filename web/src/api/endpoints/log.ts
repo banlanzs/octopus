@@ -78,6 +78,7 @@ export interface RelayLog {
     ws_mode?: RelayLogWSMode | null; // 上游 WebSocket 会话模式
     ws_exec_mode?: RelayLogWSExecMode | null; // 上游 WebSocket 事件处理方式
     ws_recovery?: RelayLogWSRecovery | null; // 本次请求触发的恢复动作
+    reasoning_effort?: string | null; // 推理强度（如 high / medium / low）
 }
 
 export type LogStatusFilter = 'all' | 'success' | 'error';

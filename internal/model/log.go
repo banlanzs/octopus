@@ -70,6 +70,9 @@ type RelayLog struct {
 	ResponseContent      string              `json:"response_content"`                         // 响应内容
 	Error                string              `json:"error"`                                    // 错误信息
 	Success              bool                `json:"success" gorm:"not null;default:false"`    // 是否成功，便于状态筛选索引
+	// ReasoningEffort 记录本次请求使用的推理强度（reasoning_effort / output_config.effort 值），
+	// 如 high / medium / low。空值表示请求未指定推理强度。
+	ReasoningEffort      string              `json:"reasoning_effort,omitempty"`               // 推理强度
 	Attempts             []ChannelAttempt    `json:"attempts" gorm:"serializer:json"`          // 所有尝试记录
 	TotalAttempts        int                 `json:"total_attempts"`                           // 总尝试次数
 	UsedWS               bool                `json:"used_ws" gorm:"default:false"`             // 是否使用了上游WebSocket
