@@ -3,8 +3,6 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
-
-	"github.com/bestruirui/octopus/internal/transformer/model"
 )
 
 // MessageRequest represents the Anthropic Messages API request format.
@@ -160,17 +158,9 @@ const (
 
 // Effort level constants for OutputConfig
 const (
-	EffortMax    = "max"
-	EffortXHigh  = "xhigh"
 	EffortHigh   = "high"
 	EffortMedium = "medium"
 	EffortLow    = "low"
-)
-
-// Thinking display constants
-const (
-	ThinkingDisplaySummarized = "summarized"
-	ThinkingDisplayOmitted    = "omitted"
 )
 
 type Thinking struct {
@@ -300,29 +290,6 @@ type MessageContent struct {
 	MultipleContent []MessageContentBlock `json:"multiple_content,omitempty"`
 }
 
-func (m MessageContent) ExtractTrivalBlocks(cacheControl *CacheControl) []MessageContentBlock {
-	var contentBlocks []MessageContentBlock
-	if m.Content != nil && *m.Content != "" {
-		contentBlocks = append(contentBlocks, MessageContentBlock{
-			Type:         "text",
-			Text:         m.Content,
-			CacheControl: cacheControl,
-		})
-	} else if len(m.MultipleContent) > 0 {
-		for _, part := range m.MultipleContent {
-			if part.Type == "text" && part.Text != nil && *part.Text != "" {
-				contentBlocks = append(contentBlocks, part)
-			}
-
-			if part.Type == "image_url" {
-				contentBlocks = append(contentBlocks, part)
-			}
-		}
-	}
-
-	return contentBlocks
-}
-
 func (c MessageContent) MarshalJSON() ([]byte, error) {
 	if c.Content != nil {
 		return json.Marshal(c.Content)
@@ -410,10 +377,6 @@ type MessageContentBlock struct {
 	Content *MessageContent `json:"content,omitempty"`
 	IsError *bool           `json:"is_error,omitempty"`
 }
-
-type ProviderExtensions = model.ProviderExtensions
-
-type GeminiExtension = model.GeminiExtension
 
 // DocumentCitationsControl mirrors document.citations on Anthropic document
 // blocks. A single `enabled` flag today; we preserve the struct shape for

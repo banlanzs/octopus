@@ -226,7 +226,7 @@ func supportsResponsesCompact(channelType outbound.OutboundType) bool {
 }
 
 func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balancer.Iterator, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, requestBody []byte) (int, time.Duration, error) {
-	span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name)
+	span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, metrics.RequestModel)
 	request, err := buildResponsesCompactRequest(c.Request.Context(), channel, usedKey.ChannelKey, requestBody)
 	if err != nil {
 		span.End(dbmodel.AttemptFailed, 0, err.Error())

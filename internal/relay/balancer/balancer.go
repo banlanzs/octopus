@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 )
@@ -136,9 +137,30 @@ func sortByPriority(items []model.GroupItem) []model.GroupItem {
 	return sorted
 }
 
-// Reset clears in-memory balancer state for tests.
+// EarliestRecoveryChannel 全冷却兜底：返回渠道级熔断中最早恢复的候选。
+// 无渠道级熔断候选时返回 false（key 级熔断需 channel 上下文，在 relay 层处理）。
+func EarliestRecoveryChannel(items []model.GroupItem) (model.GroupItem, bool) {
+	var best model.GroupItem
+	var bestUntil time.Duration
+	found := false
+	for _, item := range items {
+		until := ChannelRecoveryIn(item.ChannelID)
+		if until <= 0 {
+			continue
+		}
+		if !found || until < bestUntil {
+			best = item
+			bestUntil = until
+			found = true
+		}
+	}
+	return best, found
+}
+
+// Reset  clears in-memory balancer state for tests.
 func Reset() {
 	roundRobinCounter = 0
 	globalBreaker = sync.Map{}
 	globalSession = sync.Map{}
+	probeGuard = sync.Map{}
 }

@@ -19,6 +19,7 @@ const (
 	SettingKeyRelayLogKeepEnabled              SettingKey = "relay_log_keep_enabled"               // 是否保留历史日志
 	SettingKeyCORSAllowOrigins                 SettingKey = "cors_allow_origins"                   // 跨域白名单(逗号分隔, 如 "example.com,example2.com"). 为空不允许跨域, "*"允许所有
 	SettingKeyCircuitBreakerThreshold          SettingKey = "circuit_breaker_threshold"            // 熔断触发阈值（连续失败次数）
+	SettingKeyCircuitBreakerChannelThreshold   SettingKey = "circuit_breaker_channel_threshold"     // 渠道级熔断触发阈值（连续渠道级失败次数）
 	SettingKeyCircuitBreakerCooldown           SettingKey = "circuit_breaker_cooldown"             // 熔断基础冷却时间（秒）
 	SettingKeyCircuitBreakerMaxCooldown        SettingKey = "circuit_breaker_max_cooldown"         // 熔断最大冷却时间（秒），指数退避上限
 	SettingKeyResponsesWSEnabled               SettingKey = "responses_ws_enabled"                 // 是否启用 OpenAI Responses WS 上游能力（仅客户端 WS 入站）
@@ -43,6 +44,14 @@ const (
 	SettingKeyAutoRankInterval                 SettingKey = "auto_rank_interval"                    // 自动排序控制面任务轮询间隔(秒)
 	SettingKeyAutoRankExploreRatio             SettingKey = "auto_rank_explore_ratio"               // 自动排序探索比例(百分比 0-100)
 	SettingKeyAutoRankMinSamples               SettingKey = "auto_rank_min_samples"                 // 参与排序所需最小样本数
+	SettingKeyAutoRankChannelFactorEnabled     SettingKey = "auto_rank_channel_factor_enabled"      // 渠道级聚合健康修正开关（Auto 模式，默认开）
+	SettingKeyAutoRankChannelMinSamples        SettingKey = "auto_rank_channel_min_samples"         // 渠道聚合触发所需最小样本总数
+	SettingKeyAutoRankChannelMinModels         SettingKey = "auto_rank_channel_min_models"          // 渠道聚合触发所需最小失败模型数(≥2)
+	SettingKeyAutoRankChannelDegradeRate       SettingKey = "auto_rank_channel_degrade_rate"        // 渠道聚合惩罚触发成功率阈值(百分比)
+	SettingKeyAutoRankTTFBEnabled              SettingKey = "auto_rank_ttfb_enabled"                // 相对 TTFB 惩罚开关（Auto 排序，默认关）
+	SettingKeyAutoRankTTFBWeight               SettingKey = "auto_rank_ttfb_weight"                 // 相对 TTFB 惩罚权重（×慢速比）
+	SettingKeyAutoRankTTFBMaxSlowRatio         SettingKey = "auto_rank_ttfb_max_slow_ratio"         // TTFB 慢速比 (s-1) 上限(百分比)
+	SettingKeyAutoRankTTFBMinConfidentSample   SettingKey = "auto_rank_ttfb_min_confident_sample"   // TTFB 惩罚置信样本量阈值
 	SettingKeyApiBaseUrl                       SettingKey = "api_base_url"                         // 对外服务基础地址，用于一键导出客户端配置，为空时不显示导出入口
 	SettingKeyWebDAVURL                        SettingKey = "webdav_url"                            // WebDAV 服务器地址
 	SettingKeyWebDAVUsername                   SettingKey = "webdav_username"                       // WebDAV 用户名
@@ -70,6 +79,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyRelayLogKeepPeriod, Value: "7"},               // 默认日志保存7天
 		{Key: SettingKeyRelayLogKeepEnabled, Value: "true"},           // 默认保留历史日志
 		{Key: SettingKeyCircuitBreakerThreshold, Value: "5"},          // 默认连续失败5次触发熔断
+		{Key: SettingKeyCircuitBreakerChannelThreshold, Value: "3"},   // 默认连续3次渠道级失败触发渠道熔断
 		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},          // 默认基础冷却60秒
 		{Key: SettingKeyCircuitBreakerMaxCooldown, Value: "600"},      // 默认最大冷却600秒（10分钟）
 		{Key: SettingKeyResponsesWSEnabled, Value: "false"},           // 默认关闭 OpenAI Responses WS 新路径
@@ -94,6 +104,14 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyAutoRankInterval, Value: "60"},     // 默认每 60 秒执行一次学习/落库
 		{Key: SettingKeyAutoRankExploreRatio, Value: "10"}, // 默认 10% 请求用于探索欠采样候选
 		{Key: SettingKeyAutoRankMinSamples, Value: "3"},    // 样本 ≥3 条才按得分参与排序
+		{Key: SettingKeyAutoRankChannelFactorEnabled, Value: "true"}, // 默认启用渠道级聚合健康修正
+		{Key: SettingKeyAutoRankChannelMinSamples, Value: "8"},       // 渠道聚合样本 ≥8 条才评估
+		{Key: SettingKeyAutoRankChannelMinModels, Value: "2"},        // ≥2 个模型同时失败才触发渠道降级
+		{Key: SettingKeyAutoRankChannelDegradeRate, Value: "85"},     // 聚合成功率 <85% 进入惩罚
+		{Key: SettingKeyAutoRankTTFBEnabled, Value: "false"},         // 相对 TTFB 惩罚默认关闭，保守上线
+		{Key: SettingKeyAutoRankTTFBWeight, Value: "20"},             // TTFB 惩罚权重 20
+		{Key: SettingKeyAutoRankTTFBMaxSlowRatio, Value: "200"},      // 慢速比上限 2.0
+		{Key: SettingKeyAutoRankTTFBMinConfidentSample, Value: "10"}, // TTFB 置信样本 10
 		{Key: SettingKeyApiBaseUrl, Value: ""},                  // 默认为空，不显示客户端导出入口
 		{Key: SettingKeyWebDAVURL, Value: ""},                   // 默认为空，未配置
 		{Key: SettingKeyWebDAVUsername, Value: ""},              // 默认为空
@@ -109,7 +127,7 @@ func (s *Setting) Validate() error {
 	switch s.Key {
 	case SettingKeyModelInfoUpdateInterval, SettingKeySyncLLMInterval, SettingKeySiteSyncInterval,
 		SettingKeySiteCheckinInterval, SettingKeyRelayLogKeepPeriod,
-		SettingKeyCircuitBreakerThreshold, SettingKeyCircuitBreakerCooldown, SettingKeyCircuitBreakerMaxCooldown:
+		SettingKeyCircuitBreakerThreshold, SettingKeyCircuitBreakerChannelThreshold, SettingKeyCircuitBreakerCooldown, SettingKeyCircuitBreakerMaxCooldown:
 		_, err := strconv.Atoi(s.Value)
 		if err != nil {
 			return fmt.Errorf("setting value must be an integer")
@@ -125,12 +143,21 @@ func (s *Setting) Validate() error {
 		SettingKeyOutlierConsecFails, SettingKeyOutlierRecoverStreak,
 		SettingKeyOutlierReapMinutes, SettingKeyOutlierCFRecoverMinutes,
 		SettingKeyAutoRankInterval, SettingKeyAutoRankMinSamples,
+		SettingKeyAutoRankChannelMinSamples,
 		SettingKeyWebDAVRetentionCount:
 		// 时间窗/样本/连击/间隔等：0 或负值无意义，下限为 1。
 		return validateIntMin(s.Value, 1)
-	case SettingKeyAutoRankExploreRatio:
-		// 探索比例取百分比，允许 0（纯贪婪）到 100（全探索）。
+	case SettingKeyAutoRankExploreRatio, SettingKeyAutoRankChannelDegradeRate, SettingKeyAutoRankTTFBMaxSlowRatio:
+		// 比例类取百分比，允许 0（纯贪婪）到 100（全探索）。
 		return validateIntRange(s.Value, 0, 100)
+	case SettingKeyAutoRankTTFBWeight:
+		// TTFB 惩罚权重，允许 0（禁用惩罚）及以上。
+		return validateIntMin(s.Value, 0)
+	case SettingKeyAutoRankChannelMinModels:
+		// 渠道级降级需要至少 2 个模型同时失败（单模型失败不触发，语义下限为 2）。
+		return validateIntMin(s.Value, 2)
+	case SettingKeyAutoRankTTFBMinConfidentSample:
+		return validateIntMin(s.Value, 1)
 	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval:
 		value, err := strconv.Atoi(s.Value)
 		if err != nil {
@@ -140,7 +167,7 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("setting value must be non-negative")
 		}
 		return nil
-	case SettingKeyRelayLogKeepEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoRankEnabled, SettingKeyWebDAVIncludeStats:
+	case SettingKeyRelayLogKeepEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoRankEnabled, SettingKeyAutoRankChannelFactorEnabled, SettingKeyAutoRankTTFBEnabled, SettingKeyWebDAVIncludeStats:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("setting value must be true or false")
 		}

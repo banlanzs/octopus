@@ -376,30 +376,6 @@ function MorphingDialogTitle({
   );
 }
 
-export type MorphingDialogSubtitleProps = {
-  children: React.ReactNode;
-  className?: string;
-  style?: React.CSSProperties;
-};
-
-function MorphingDialogSubtitle({
-  children,
-  className,
-  style,
-}: MorphingDialogSubtitleProps) {
-  const { uniqueId } = useMorphingDialog();
-
-  return (
-    <motion.div
-      layoutId={`dialog-subtitle-container-${uniqueId}`}
-      className={className}
-      style={style}
-    >
-      {children}
-    </motion.div>
-  );
-}
-
 export type MorphingDialogDescriptionProps = {
   children: React.ReactNode;
   className?: string;
@@ -436,32 +412,6 @@ function MorphingDialogDescription({
     >
       {children}
     </motion.div>
-  );
-}
-
-export type MorphingDialogImageProps = {
-  src: string;
-  alt: string;
-  className?: string;
-  style?: React.CSSProperties;
-};
-
-function MorphingDialogImage({
-  src,
-  alt,
-  className,
-  style,
-}: MorphingDialogImageProps) {
-  const { uniqueId } = useMorphingDialog();
-
-  return (
-    <motion.img
-      src={src}
-      alt={alt}
-      className={cn(className)}
-      layoutId={`dialog-img-${uniqueId}`}
-      style={style}
-    />
   );
 }
 
@@ -510,8 +460,6 @@ export {
   MorphingDialogContent,
   MorphingDialogClose,
   MorphingDialogTitle,
-  MorphingDialogSubtitle,
   MorphingDialogDescription,
-  MorphingDialogImage,
   useMorphingDialog,
 };

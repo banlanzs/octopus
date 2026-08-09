@@ -8,7 +8,6 @@ import "strings"
 type AlternationProvider string
 
 const (
-	AlternationProviderUnknown   AlternationProvider = ""
 	AlternationProviderAnthropic AlternationProvider = "anthropic"
 	AlternationProviderGemini    AlternationProvider = "gemini"
 	AlternationProviderOpenAI    AlternationProvider = "openai"

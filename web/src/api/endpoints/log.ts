@@ -1,5 +1,5 @@
 import type { InfiniteData } from '@tanstack/react-query';
-import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient, API_BASE_URL } from '../client';
 import { logger } from '@/lib/logger';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -141,49 +141,6 @@ function appendLogListParams(params: URLSearchParams, filters?: UseLogsOptions['
     if (keyword) params.set('keyword', keyword);
     if (filters?.keyword_scope && filters.keyword_scope !== 'default') params.set('keyword_scope', filters.keyword_scope);
     if (filters?.keyword_mode && filters.keyword_mode !== 'default') params.set('keyword_mode', filters.keyword_mode);
-}
-
-export interface LogPageResponse {
-    logs: RelayLog[];
-    total: number;
-    has_more?: boolean;
-    next_cursor?: LogCursor | null;
-    search_mode?: string;
-    warning?: string;
-}
-
-export function useLogPage(params: LogListParams) {
-    const page = params.page ?? 1;
-    const pageSize = params.page_size ?? 20;
-    const filters = logFiltersKey(params);
-
-    return useQuery({
-        queryKey: ['logs', 'page', pageSize, page, filters],
-        queryFn: async (): Promise<LogPageResponse> => {
-            const search = new URLSearchParams();
-            search.set('page', String(page));
-            search.set('page_size', String(pageSize));
-            search.set('include_content', String(params.include_content ?? false));
-            search.set('with_total', String(params.with_total ?? true));
-            appendLogListParams(search, params);
-            const result = await apiClient.get<{ logs: RelayLog[] | null; total: number; has_more?: boolean; next_cursor?: LogCursor | null; warning?: string; search_mode?: string } | null>(
-                `/api/v1/log/list?${search.toString()}`,
-            );
-            return {
-                logs: result?.logs ?? [],
-                total: result?.total ?? 0,
-                has_more: result?.has_more ?? false,
-                next_cursor: result?.next_cursor ?? null,
-                warning: result?.warning,
-                search_mode: result?.search_mode,
-            };
-        },
-        placeholderData: keepPreviousData,
-        staleTime: 0,
-        refetchOnMount: 'always',
-        refetchOnWindowFocus: false,
-        enabled: params.enabled ?? true,
-    });
 }
 
 /**

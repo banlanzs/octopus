@@ -166,13 +166,6 @@ type SiteProjectedKeyUpdateItem struct {
 	Remark     *string `json:"remark,omitempty"`
 }
 
-type SiteProjectedKeyUpdateRequest struct {
-	GroupKey     string                       `json:"group_key" binding:"required"`
-	KeysToAdd    []SiteProjectedKeyAddRequest `json:"keys_to_add,omitempty"`
-	KeysToUpdate []SiteProjectedKeyUpdateItem `json:"keys_to_update,omitempty"`
-	KeysToDelete []int                        `json:"keys_to_delete,omitempty"`
-}
-
 type SiteSourceKeyAddRequest struct {
 	Enabled bool   `json:"enabled"`
 	Token   string `json:"token" binding:"required"`

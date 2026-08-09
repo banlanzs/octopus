@@ -176,7 +176,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 			requestModel, group.Mode, channel.Name, item.ModelName,
 			iter.Index()+1, iter.Len(), iter.IsSticky(), stream)
 
-		span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name)
+		span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
 
 		// 尝试一次转发
 		statusCode, written, usage, upstreamCT, fwdErr := imagesAttempt(ctx, endpoint, c, bc, isMultipart, boundary, jsonPayload, stream, channel, usedKey.ChannelKey, group.FirstTokenTimeOut, metrics, item.ModelName, hb)

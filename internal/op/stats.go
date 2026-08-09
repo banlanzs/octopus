@@ -354,21 +354,6 @@ func StatsHourlyUpdate(metrics model.StatsMetrics) error {
 	return nil
 }
 
-func StatsModelUpdate(stats model.StatsModel) error {
-	modelCache, ok := statsModelCache.Get(stats.ID)
-	if !ok {
-		modelCache = model.StatsModel{
-			ID: stats.ID,
-		}
-	}
-	modelCache.StatsMetrics.Add(stats.StatsMetrics)
-	statsModelCache.Set(stats.ID, modelCache)
-	statsModelCacheNeedUpdateLock.Lock()
-	statsModelCacheNeedUpdate[stats.ID] = struct{}{}
-	statsModelCacheNeedUpdateLock.Unlock()
-	return nil
-}
-
 func StatsAPIKeyUpdate(apiKeyID int, metrics model.StatsMetrics) error {
 	apiKeyCache, ok := statsAPIKeyCache.Get(apiKeyID)
 	if !ok {

@@ -133,20 +133,6 @@ export function useGroupHealthList() {
     });
 }
 
-export function useGroupHealth(groupId: number | null) {
-    const { enabled } = useGroupHealthEnabled();
-    return useQuery({
-        queryKey: ['group-health', 'detail', groupId],
-        queryFn: async () => apiClient.get<GroupHealthGroupView>(`/api/v1/group/health/${groupId}`),
-        select: normalizeView,
-        enabled: enabled && groupId != null && groupId > 0,
-        refetchInterval: (query) => {
-            const data = query.state.data as GroupHealthGroupView | undefined;
-            return data?.latest?.status === 'running' ? 5000 : 30000;
-        },
-    });
-}
-
 export function useRunGroupHealth() {
     const queryClient = useQueryClient();
     const { enabled } = useGroupHealthEnabled();

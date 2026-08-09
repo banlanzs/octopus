@@ -26,7 +26,6 @@ const (
 	SiteBatchTriggerScheduled SiteBatchTrigger = "scheduled"
 	SiteBatchTriggerManual    SiteBatchTrigger = "manual"
 	SiteBatchTriggerImport    SiteBatchTrigger = "import"
-	SiteBatchTriggerAuto      SiteBatchTrigger = "auto"
 )
 
 type SiteBatchReason string
@@ -49,7 +48,6 @@ const (
 	SiteBatchReasonContextCanceled         SiteBatchReason = "context_canceled"
 	SiteBatchReasonContextDeadlineExceeded SiteBatchReason = "context_deadline_exceeded"
 	SiteBatchReasonDatabaseError           SiteBatchReason = "database_error"
-	SiteBatchReasonInternalError           SiteBatchReason = "internal_error"
 	SiteBatchReasonUnknown                 SiteBatchReason = "unknown"
 )
 
@@ -170,15 +168,6 @@ func (s *SiteBatchSummary) markCanceled(ctxErr error) {
 func (s *SiteBatchSummary) addFailure(siteID int, platform model.SitePlatform, accountID int, reason SiteBatchReason, message string) {
 	s.addGroup(s.failureGroups, siteID, platform, reason, func(g *SiteBatchOutcomeGroup) { g.Failed++ })
 	s.addSample(siteID, platform, accountID, reason, message)
-}
-
-func (s *SiteBatchSummary) addWarning(siteID int, platform model.SitePlatform, accountID int, reason SiteBatchReason, message string) {
-	if reason == "" {
-		reason = SiteBatchReasonUnknown
-	}
-	s.Warnings++
-	s.addGroup(s.warningGroups, siteID, platform, reason, func(g *SiteBatchOutcomeGroup) { g.Warnings++ })
-	s.addSample(siteID, platform, accountID, reason, sanitizeSiteStatusText(message))
 }
 
 func (s *SiteBatchSummary) addGroup(groups map[siteBatchGroupKey]*SiteBatchOutcomeGroup, siteID int, platform model.SitePlatform, reason SiteBatchReason, update func(*SiteBatchOutcomeGroup)) {

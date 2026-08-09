@@ -5,6 +5,7 @@ static/out/
 .claude/
 .codex
 .gocache/
+.reasonix/
 .serena/
 .workflow/
 .tmp/

@@ -68,16 +68,6 @@ func getWSResponseConn(responseID string) (string, bool) {
 	return binding.connID, true
 }
 
-func deleteWSResponseConn(responseID string) {
-	responseID = strings.TrimSpace(responseID)
-	if responseID == "" {
-		return
-	}
-	wsResponseConnState.mu.Lock()
-	delete(wsResponseConnState.bindings, responseID)
-	wsResponseConnState.mu.Unlock()
-}
-
 func resetWSResponseConnStateForTest() {
 	wsResponseConnState.mu.Lock()
 	wsResponseConnState.bindings = make(map[string]wsResponseConnBinding)

@@ -10,16 +10,13 @@ const (
 	CodeCommonInvalidJSON       = "common.invalid_json"
 	CodeCommonInvalidParam      = "common.invalid_param"
 	CodeCommonValidationFailed  = "common.validation_failed"
-	CodeCommonBadRequest        = "common.bad_request"
 	CodeCommonNotFound          = "common.not_found"
 	CodeCommonDuplicateResource = "common.duplicate_resource"
 	CodeCommonDatabaseError     = "common.database_error"
 	CodeCommonInternalError     = "common.internal_error"
 
 	CodeAuthUnauthorized       = "auth.unauthorized"
-	CodeAuthForbidden          = "auth.forbidden"
 	CodeAuthInvalidToken       = "auth.invalid_token"
-	CodeAuthExpiredToken       = "auth.expired_token"
 	CodeAuthInvalidCredentials = "auth.invalid_credentials"
 	CodeAuthAPIKeyExpired      = "auth.api_key_expired"
 	CodeAuthAPIKeyMissing      = "auth.api_key_missing"
@@ -54,10 +51,6 @@ func Newf(code string, format string, args ...any) *Error {
 
 func Wrap(code string, message string, err error) *Error {
 	return &Error{Code: code, Message: message, Err: err}
-}
-
-func Wrapf(code string, err error, format string, args ...any) *Error {
-	return Wrap(code, fmt.Sprintf(format, args...), err)
 }
 
 func (e *Error) Error() string {
@@ -147,10 +140,6 @@ func Params(err error) map[string]any {
 		return appErr.Params
 	}
 	return nil
-}
-
-func IsCode(err error, code string) bool {
-	return Code(err) == code
 }
 
 func InvalidJSON(message string) *Error {

@@ -26,12 +26,4 @@ export function matchesGroupName(modelName: string, groupKey: string) {
     return modelName.toLowerCase().includes(groupKey);
 }
 
-export function buildChannelNameByModelKey(modelChannels: LLMChannel[]) {
-    const map = new Map<string, string>();
-    modelChannels.forEach((mc) => {
-        map.set(modelChannelKey(mc.channel_id, mc.name), mc.channel_name);
-    });
-    return map;
-}
-
 

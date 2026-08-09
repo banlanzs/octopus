@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -156,5 +157,240 @@ func TestAutoRankAllStatsSkipsEmpty(t *testing.T) {
 	}
 	if all[0].ChannelID != 7 || all[0].ModelName != "gpt-4o" {
 		t.Fatalf("unexpected stats entry: %+v", all[0])
+	}
+}
+
+func TestTargetFactorForRate(t *testing.T) {
+	cases := []struct {
+		rate float64
+		want float64
+	}{
+		{0.95, 1.0},  // 健康
+		{0.90, 1.0},  // 边界 >=0.9
+		{0.85, 0.6},  // 轻微降级
+		{0.70, 0.6},  // 边界 >=0.7
+		{0.60, 0.4},  // 明显降级
+		{0.50, 0.4},  // 边界 >=0.5
+		{0.30, 0.3},  // 濒危
+		{0.00, 0.3},  // 全失败
+	}
+	for _, c := range cases {
+		if got := targetFactorForRate(c.rate); got != c.want {
+			t.Fatalf("targetFactorForRate(%v) = %v, want %v", c.rate, got, c.want)
+		}
+	}
+}
+
+func TestChannelAggregateRate(t *testing.T) {
+	agg := channelAggregate{}
+	if r := agg.rate(); r != 1 {
+		t.Fatalf("expected empty aggregate rate 1, got %v", r)
+	}
+	agg = channelAggregate{totalSamples: 10, totalFails: 2}
+	if r := agg.rate(); r != 0.8 {
+		t.Fatalf("expected rate 0.8, got %v", r)
+	}
+	agg = channelAggregate{totalSamples: 10, totalFails: 10}
+	if r := agg.rate(); r != 0 {
+		t.Fatalf("expected rate 0, got %v", r)
+	}
+}
+
+func TestComputeChannelAggregates(t *testing.T) {
+	AutoRankReset()
+	for i := 0; i < 5; i++ {
+		RecordAutoSample(1, "m1", true, 100)
+	}
+	for i := 0; i < 3; i++ {
+		RecordAutoSample(1, "m2", false, 0)
+	}
+	items := []model.GroupItem{
+		{ChannelID: 1, ModelName: "m1"},
+		{ChannelID: 1, ModelName: "m2"},
+		{ChannelID: 2, ModelName: "m3"},
+	}
+	aggs := computeChannelAggregates(items)
+	a1 := aggs[1]
+	if a1.models != 2 || a1.totalSamples != 8 || a1.totalFails != 3 || a1.failModels != 1 {
+		t.Fatalf("unexpected channel 1 aggregate: %+v", a1)
+	}
+	a2 := aggs[2]
+	if a2.models != 1 || a2.totalSamples != 0 || a2.failModels != 0 {
+		t.Fatalf("unexpected channel 2 aggregate: %+v", a2)
+	}
+}
+
+// 判据测试：单模型失败不惩罚 / 样本不足不惩罚 / 聚合健康不惩罚 / 多模型失败触发
+func TestChannelAggregateFactorJudgment(t *testing.T) {
+	AutoRankReset()
+
+	// 单模型失败（failModels=1）：即使聚合成功率很低也不触发（模型级隔离）
+	f := channelAggregateFactor(1, channelAggregate{models: 2, totalSamples: 20, totalFails: 10, failModels: 1})
+	if f != 1.0 {
+		t.Fatalf("expected single-model failure not to penalize channel, got %v", f)
+	}
+
+	// 样本不足（totalSamples=4 < 8）但多模型同时失败：置信度 4/8=0.5 →
+	// 半额惩罚 target = 1-(1-0.3)*0.5 = 0.65（线性打折，平滑过渡）
+	f = channelAggregateFactor(2, channelAggregate{models: 2, totalSamples: 4, totalFails: 4, failModels: 2})
+	if math.Abs(f-0.65) > 1e-9 {
+		t.Fatalf("expected under-sampled channel to get partial penalty 0.65, got %v", f)
+	}
+
+	// 聚合健康（rate >= 0.85）：不惩罚
+	f = channelAggregateFactor(3, channelAggregate{models: 2, totalSamples: 20, totalFails: 1, failModels: 1})
+	if f != 1.0 {
+		t.Fatalf("expected healthy channel factor 1.0, got %v", f)
+	}
+
+	// 多模型同时失败：触发惩罚，首次调用即为目标系数 0.3（rate=0.2 < 0.5）
+	f = channelAggregateFactor(4, channelAggregate{models: 2, totalSamples: 20, totalFails: 16, failModels: 2})
+	if math.Abs(f-0.3) > 1e-9 {
+		t.Fatalf("expected degraded channel factor 0.3, got %v", f)
+	}
+
+	// 多模型失败但聚合成功率仍在 [0.7,0.9)：目标 0.6
+	f = channelAggregateFactor(5, channelAggregate{models: 3, totalSamples: 30, totalFails: 7, failModels: 3})
+	if math.Abs(f-0.6) > 1e-9 {
+		t.Fatalf("expected mildly degraded channel factor 0.6, got %v", f)
+	}
+}
+
+// EWMA 平滑：目标稳定时收敛到目标；目标恢复时系数平滑回升
+func TestChannelAggregateFactorEWMA(t *testing.T) {
+	AutoRankReset()
+	degraded := channelAggregate{models: 2, totalSamples: 20, totalFails: 16, failModels: 2}
+	healthy := channelAggregate{models: 2, totalSamples: 20, totalFails: 1, failModels: 1}
+
+	f := channelAggregateFactor(10, degraded)
+	if math.Abs(f-0.3) > 1e-9 {
+		t.Fatalf("expected first factor 0.3, got %v", f)
+	}
+	// 连续降级评估：收敛到 0.3
+	for i := 0; i < 5; i++ {
+		channelAggregateFactor(10, degraded)
+	}
+	if f = channelAggregateFactor(10, degraded); math.Abs(f-0.3) > 1e-9 {
+		t.Fatalf("expected converged factor 0.3, got %v", f)
+	}
+
+	// 渠道恢复：系数平滑回升（0.7x+0.3 递推），不瞬跳
+	prev := channelAggregateFactor(10, healthy)
+	if prev >= 1.0 {
+		t.Fatalf("expected recovery to start below 1.0, got %v", prev)
+	}
+	for i := 0; i < 10; i++ {
+		cur := channelAggregateFactor(10, healthy)
+		if cur <= prev {
+			t.Fatalf("expected factor to rise monotonically during recovery: prev=%v cur=%v", prev, cur)
+		}
+		prev = cur
+	}
+	if prev >= 1.0 {
+		t.Fatalf("expected factor to approach but not overshoot 1.0, got %v", prev)
+	}
+}
+
+// 排序语义：被惩罚渠道的模型整体排后，但渠道内相对顺序保持
+func TestAutoRankLessScoredChannelPenalty(t *testing.T) {
+	AutoRankReset()
+	// 渠道 A 健康（factor 1.0），渠道 B 被惩罚（factor 0.3）
+	channelAggregateFactor(1, channelAggregate{models: 2, totalSamples: 20, totalFails: 1, failModels: 1})
+	channelAggregateFactor(2, channelAggregate{models: 2, totalSamples: 20, totalFails: 16, failModels: 2})
+
+	healthy := AutoRankStats{Samples: 10, SuccessRate: 0.9, EWMALatencyMS: 3000} // 得分 87
+	fastDegraded := AutoRankStats{Samples: 10, SuccessRate: 1.0, EWMALatencyMS: 100} // 得分 99.9，被渠道惩罚压制
+
+	// 渠道惩罚后：被惩罚渠道的候选不应排在健康渠道候选之前（级联降级）
+	if autoRankLessScored(2, fastDegraded, 1, healthy, 0) {
+		t.Fatal("expected degraded channel candidate not to outrank healthy channel candidate")
+	}
+	// 健康渠道候选应排在惩罚渠道候选之前
+	if !autoRankLessScored(1, healthy, 2, fastDegraded, 0) {
+		t.Fatal("expected healthy channel candidate to outrank degraded channel candidate")
+	}
+
+	// 渠道内保序：同一惩罚渠道内，快的模型仍排在慢的之前
+	slowDegraded := AutoRankStats{Samples: 10, SuccessRate: 1.0, EWMALatencyMS: 5000}
+	if !autoRankLessScored(2, fastDegraded, 2, slowDegraded, 0) {
+		t.Fatal("expected faster model to keep priority within same degraded channel")
+	}
+	if autoRankLessScored(2, slowDegraded, 2, fastDegraded, 0) {
+		t.Fatal("expected slower model not to outrank faster model within same channel")
+	}
+
+	// 渠道惩罚不影响档位：无样本候选仍排最后（即使来自健康渠道）
+	noSample := AutoRankStats{}
+	if autoRankLessScored(1, noSample, 2, fastDegraded, 0) {
+		t.Fatal("expected no-sample candidate to rank after sampled candidate regardless of penalty")
+	}
+}
+
+// IsChannelDegraded 反映平滑系数状态
+func TestIsChannelDegraded(t *testing.T) {
+	AutoRankReset()
+	channelAggregateFactor(1, channelAggregate{models: 2, totalSamples: 20, totalFails: 1, failModels: 1})
+	channelAggregateFactor(2, channelAggregate{models: 2, totalSamples: 20, totalFails: 16, failModels: 2})
+	if IsChannelDegraded(1) {
+		t.Fatal("expected healthy channel not degraded")
+	}
+	if !IsChannelDegraded(2) {
+		t.Fatal("expected degraded channel flagged")
+	}
+	// 无记录渠道视为健康
+	if IsChannelDegraded(99) {
+		t.Fatal("expected unknown channel treated as healthy")
+	}
+}
+
+// 相对 TTFB 惩罚：只罚慢于中位数者，带慢速比上限与置信度打折
+func TestTTFBPenalty(t *testing.T) {
+	// median=1000ms，latency=2000ms（慢 2 倍），样本充足 → slow=1.0, penalty=20
+	slow := AutoRankStats{Samples: 10, SuccessRate: 1, EWMALatencyMS: 2000}
+	if p := ttfbPenalty(slow, 1000); p != 20 {
+		t.Fatalf("expected penalty 20 for 2x slow, got %v", p)
+	}
+	// 样本不足（5 < 10）→ 置信度 0.5 → penalty 10
+	if p := ttfbPenalty(AutoRankStats{Samples: 5, SuccessRate: 1, EWMALatencyMS: 2000}, 1000); p != 10 {
+		t.Fatalf("expected half-confidence penalty 10, got %v", p)
+	}
+	// 快于中位数 → 不惩罚
+	fast := AutoRankStats{Samples: 10, SuccessRate: 1, EWMALatencyMS: 500}
+	if p := ttfbPenalty(fast, 1000); p != 0 {
+		t.Fatalf("expected no penalty for faster candidate, got %v", p)
+	}
+	// 慢速比上限：慢 4 倍 → slow 截断到 2.0 → penalty 40
+	if p := ttfbPenalty(AutoRankStats{Samples: 10, SuccessRate: 1, EWMALatencyMS: 4000}, 1000); p != 40 {
+		t.Fatalf("expected capped penalty 40, got %v", p)
+	}
+	// 无样本/无效输入 → 0
+	if p := ttfbPenalty(AutoRankStats{}, 1000); p != 0 {
+		t.Fatalf("expected 0 penalty for empty stats, got %v", p)
+	}
+	if p := ttfbPenalty(slow, 0); p != 0 {
+		t.Fatalf("expected 0 penalty when median unavailable, got %v", p)
+	}
+}
+
+// 组内延迟中位数：少于 2 个有效样本时不启用相对惩罚
+func TestGroupMedianLatencyMS(t *testing.T) {
+	AutoRankReset()
+	// 仅 1 个模型有延迟样本 → 返回 0
+	RecordAutoSample(1, "m1", true, 800)
+	items := []model.GroupItem{{ChannelID: 1, ModelName: "m1"}}
+	if m := groupMedianLatencyMS(items); m != 0 {
+		t.Fatalf("expected 0 median with single sample, got %v", m)
+	}
+
+	// 3 个模型：800 / 1200 / 2000 → 中位数 1200
+	RecordAutoSample(2, "m2", true, 1200)
+	RecordAutoSample(3, "m3", true, 2000)
+	items = []model.GroupItem{
+		{ChannelID: 1, ModelName: "m1"},
+		{ChannelID: 2, ModelName: "m2"},
+		{ChannelID: 3, ModelName: "m3"},
+	}
+	if m := groupMedianLatencyMS(items); m != 1200 {
+		t.Fatalf("expected median 1200, got %v", m)
 	}
 }

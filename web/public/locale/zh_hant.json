@@ -21,10 +21,6 @@
     "apiKeyDashboard": {
         "error": "載入資料失敗",
         "logout": "登出",
-        "requestStats": "請求統計",
-        "totalStats": "全部統計",
-        "inputStats": "輸入統計",
-        "outputStats": "輸出統計",
         "requestCount": "請求次數",
         "timeConsumed": "消耗時間",
         "totalToken": "消耗 Token",
@@ -35,8 +31,6 @@
         "outputCost": "輸出費用",
         "successRequests": "成功請求",
         "failedRequests": "失敗請求",
-        "quota": "剩餘額度",
-        "unlimited": "無限制",
         "expireAt": "過期時間",
         "neverExpire": "永不過期",
         "daysLeft": "天後到期",
@@ -48,7 +42,6 @@
         "site": "站點",
         "channel": "供應源",
         "group": "分組",
-        "key": "金鑰",
         "model": "價格",
         "log": "日誌",
         "setting": "設定"
@@ -66,10 +59,7 @@
             "createdDesc": "時間倒序",
             "balanceDesc": "餘額高到低",
             "balanceAsc": "餘額低到高",
-            "asc": "升序",
-            "desc": "降序",
             "logRefresh": {
-                "refresh": "刷新日誌"
             },
             "logFilter": {
                 "title": "日誌篩選",
@@ -293,7 +283,6 @@
             },
             "import": {
                 "title": "匯入（增量）",
-                "selected": "已選擇檔案",
                 "button": "匯入 JSON",
                 "importing": "匯入中...",
                 "noFile": "請先選擇 JSON 檔案",
@@ -388,8 +377,6 @@
             "title": "版本資訊",
             "currentVersion": "當前版本",
             "latestVersion": "最新版本",
-            "buildTime": "建構時間",
-            "publishedAt": "發布時間",
             "github": "GitHub 倉庫",
             "unknown": "未知",
             "versionMismatch": "版本不匹配",
@@ -507,22 +494,16 @@
             "restoreSuccess": "恢復成功",
             "restoreFailed": "恢復失敗",
             "restoreConfirm": "確認從此備份恢復？已有資料將被增量覆蓋。",
-            "fileName": "檔案名稱",
-            "fileSize": "大小",
-            "modifiedAt": "修改時間",
-            "refresh": "重新整理",
-            "notConfigured": "WebDAV 未設定"
+            "refresh": "重新整理"
         }
     },
     "group": {
         "toast": {
-            "created": "建立成功",
             "createFailed": "建立失敗",
             "updated": "更新成功",
             "updateFailed": "更新失敗",
             "deleted": "刪除成功",
             "deleteFailed": "刪除失敗",
-            "autoAddFailed": "自動新增失敗",
             "pinned": "已置頂",
             "unpinned": "已取消置頂",
             "pinFailed": "置頂操作失敗"
@@ -539,7 +520,6 @@
             "cloneSuffix": "副本",
             "namePlaceholder": "為預設命名",
             "name": "預設名稱",
-            "close": "關閉",
             "loading": "載入中...",
             "empty": "暫無預設",
             "activeBadge": "目前",
@@ -599,9 +579,7 @@
             "items": "已選模型",
             "addItem": "新增模型",
             "autoAdd": "自動新增",
-            "clear": "清空",
-            "selectChannel": "供應源",
-            "selectModel": "模型"
+            "clear": "清空"
         },
         "mode": {
             "roundRobin": "輪詢",
@@ -738,10 +716,7 @@
             "noMore": "沒有更多日誌了"
         },
         "card": {
-            "error": "錯誤",
             "errorInfo": "錯誤訊息",
-            "firstToken": "首字",
-            "totalTime": "總耗時",
             "duration": "耗時",
             "input": "輸入",
             "output": "輸出",
@@ -753,7 +728,6 @@
             "responseContent": "響應內容",
             "noRequestContent": "(無請求內容)",
             "noResponseContent": "(無響應內容)",
-            "firstTokenTime": "首字時間",
             "tokens": "tokens",
             "retryDetails": "重試詳情",
             "attempts": "次嘗試",
@@ -780,29 +754,7 @@
             "wsReconnectHint": "本次請求原本的上游 WebSocket 鏈路已中斷，重新建立連線後恢復成功。",
             "wsReplayRecoveryHint": "本次請求先嘗試續傳失敗，隨後自動回放歷史內容恢復了上下文，並建立了新的續傳錨點。",
             "wsDowngradeHint": "本次請求原本嘗試走上游 WebSocket，但因上游不可用已自動降級為 HTTP。",
-            "inputDetails": "輸入明細",
-            "transportInput": "傳輸輸入",
-            "billInput": "計費輸入",
-            "cacheRead": "快取讀取",
-            "cacheWrite": "快取寫入",
             "reasoningEffort": "推理強度"
-        },
-        "filters": {
-            "keywordPlaceholder": "搜尋模型、API Key 或內容",
-            "channel": "供應源",
-            "allChannels": "全部供應源",
-            "status": "狀態",
-            "allStatus": "全部狀態",
-            "success": "成功",
-            "error": "錯誤",
-            "reset": "重置",
-            "refresh": "刷新"
-        },
-        "pagination": {
-            "prev": "上一頁",
-            "next": "下一頁",
-            "page": "第 {page} 頁",
-            "pagesRange": "第 {from} ~ {to} 頁"
         }
     },
     "channel": {
@@ -865,20 +817,16 @@
             "type": "供應源類型",
             "baseUrls": "Base URLs",
             "baseUrlUrl": "地址",
-            "baseUrlDelay": "延遲(ms)",
             "advanced": "進階設定",
             "apiKey": "API Key",
             "customHeader": "自定義 Header",
             "customHeaderKey": "Header Key",
             "customHeaderValue": "Header Value",
             "customHeaderAdd": "新增 Header",
-            "channelProxy": "供應源代理",
-            "channelProxyPlaceholder": "可選：僅對該供應源生效（覆蓋全域代理）",
             "paramOverride": "參數覆蓋",
             "paramOverridePlaceholder": "可選：JSON 字串，用於覆蓋請求參數",
             "model": "模型",
             "enabled": "啟用",
-            "proxy": "使用代理",
             "modelCustomPlaceholder": "自定義模型名稱",
             "modelAdd": "新增",
             "modelRefresh": "重新整理",
@@ -896,11 +844,6 @@
             "typeVolcengine": "火山引擎",
             "autoSync": "自動同步",
             "forceDeepSeekThinking": "啟用 DeepSeek thinking 參數",
-            "autoGroup": "自動分組",
-            "autoGroupNone": "不自動分組",
-            "autoGroupFuzzy": "模糊比對",
-            "autoGroupExact": "準確比對",
-            "autoGroupRegex": "正規比對",
             "wsMode": "Responses WS 模式",
             "wsModeInherit": "跟隨全域",
             "wsModePassthrough": "直通",

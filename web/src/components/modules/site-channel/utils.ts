@@ -159,21 +159,6 @@ export function filterGroups(groups: SiteChannelGroup[], activeFilter: SiteChann
     return groups.filter((group) => group.group_key === activeFilter.groupKey);
 }
 
-export function groupFilterCount(groups: SiteChannelGroup[], activeFilter: SiteChannelGroupFilter) {
-    return filterGroups(groups, activeFilter).reduce((count, group) => count + group.models.length, 0);
-}
-
-export function countAccountKeys(account: SiteChannelAccount) {
-    return account.groups.reduce(
-        (acc, group) => {
-            acc.total += group.key_count;
-            acc.enabled += group.enabled_key_count;
-            return acc;
-        },
-        { total: 0, enabled: 0 },
-    );
-}
-
 export function isMaskedTokenValue(value: string) {
     const trimmed = value.trim();
     if (!trimmed) return false;

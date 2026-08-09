@@ -19,6 +19,22 @@ func isPassthroughStatus(code int) bool {
 	return code == 429 || code == 503
 }
 
+// isAutoRankCountableFailure 判断一次失败是否计入 AutoRank 失败样本（影响健康度）。
+// 统计口径对齐 ccLoad：只统计能反映渠道/Key 质量的结果，排除客户端噪音——
+//   - 客户端误用（404/415/422 等非 401/402/403 的 4xx）、客户端取消(499)、408：不计
+//   - 限流(429)：不计（交给熔断 Soft 分支与重试语义，避免个别坏 Key 拉低渠道）
+//   - 配额类(596)：不计（不反映渠道质量）
+// 纳入：连接错误(0)、Key 级认证(401/402/403/405)、渠道级 5xx(500/502/503/504)、
+// Cloudflare(520/521/524)、流式异常(597/598/599)。
+func isAutoRankCountableFailure(statusCode int) bool {
+	switch statusCode {
+	case 0, 401, 402, 403, 405, 500, 502, 503, 504, 520, 521, 524, 597, 598, 599:
+		return true
+	default:
+		return false
+	}
+}
+
 // parseRetryAfter 解析 Retry-After 响应头（仅支持秒数格式），上限 60s
 func parseRetryAfter(header string) time.Duration {
 	if header == "" {

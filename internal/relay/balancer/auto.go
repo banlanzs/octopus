@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sort"
 	"strings"
@@ -40,11 +41,19 @@ func (b *Auto) Candidates(items []model.GroupItem) []model.GroupItem {
 	}
 	result := make([]model.GroupItem, n)
 	copy(result, items)
+	// 渠道聚合修正（纯果驱动）：先按组内渠道聚合模型窗口，更新各渠道的
+	// 平滑系数（副作用），再按"模型得分 × 渠道系数 − 相对 TTFB 惩罚"排序。
+	aggregates := computeChannelAggregates(result)
+	for channelID, agg := range aggregates {
+		channelAggregateFactor(channelID, agg)
+	}
+	medianMS := groupMedianLatencyMS(result)
 	// 得分相同（如均无有效样本）时保持原配置顺序，避免无谓的排序抖动。
 	sort.SliceStable(result, func(i, j int) bool {
-		return autoRankLess(
-			GetAutoRankStats(result[i].ChannelID, result[i].ModelName),
-			GetAutoRankStats(result[j].ChannelID, result[j].ModelName),
+		return autoRankLessScored(
+			result[i].ChannelID, GetAutoRankStats(result[i].ChannelID, result[i].ModelName),
+			result[j].ChannelID, GetAutoRankStats(result[j].ChannelID, result[j].ModelName),
+			medianMS,
 		)
 	})
 	// epsilon 探索：以探索比例把"样本不足"的候选提前尝试，保证冷启动候选
@@ -244,6 +253,285 @@ func autoRankLess(a, b AutoRankStats) bool {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// 渠道级聚合健康修正（纯果驱动，非独立信号源）
+//
+// 语义：渠道整体健康度不是独立存在的"因"，而是"该渠道在组内各模型窗口
+// 同时恶化"这一事实的统计投影（果）。因此本修正不注入任何新数据面：
+// 排序时实时聚合组内各模型的 AutoRankStats，仅当满足判据
+//   (a) 渠道样本总量 ≥ minSamples
+//   (b) 窗口内有失败样本的模型数 ≥ minModels（≥2，单模型失败不触发）
+//   (c) 聚合成功率 < degradeRate
+// 时，把该渠道所有模型的有效得分乘以一个 <1 的系数（分档 + EWMA 平滑）。
+//
+// 效果：
+//   - 单模型失败 → 不触发判据 → 同渠道其他模型完全不受影响（模型级隔离）；
+//   - 渠道整体劣化 → 各模型窗口同时恶化 → 判据命中 → 全渠道统一系数
+//     （渠道内相对顺序不变：同渠道最好的模型仍排最前）；
+//   - 渠道恢复 → 聚合回升 → 系数平滑回到 1.0，自动复原。
+// 系数只作用于排序（不写入模型窗口），学习窗口始终记录真实性能。
+// ---------------------------------------------------------------------------
+
+// channelAggregate 一次排序请求中某渠道的组内聚合统计。
+type channelAggregate struct {
+	models       int // 组内该渠道的模型数
+	totalSamples int // 窗口样本总数（组内模型之和）
+	totalFails   int // 窗口失败总数
+	failModels   int // 窗口内有失败样本的模型数
+}
+
+// rate 返回聚合成功率（样本加权）；无样本视为健康（1）。
+func (a channelAggregate) rate() float64 {
+	if a.totalSamples <= 0 {
+		return 1
+	}
+	return 1 - float64(a.totalFails)/float64(a.totalSamples)
+}
+
+// channelFactorEntry 渠道聚合系数的平滑状态。仅由排序请求侧更新（纯果），
+// 无独立数据源；lastSeen 供内存回收。
+type channelFactorEntry struct {
+	mu       sync.Mutex
+	factor   float64
+	inited   bool
+	lastSeen time.Time
+}
+
+var globalChannelFactor sync.Map // key: int(channelID) -> *channelFactorEntry
+
+func channelFactorEnabled() bool {
+	enabled, err := op.SettingGetBool(model.SettingKeyAutoRankChannelFactorEnabled)
+	if err != nil {
+		return true
+	}
+	return enabled
+}
+
+func channelMinSamples() int {
+	v, err := op.SettingGetInt(model.SettingKeyAutoRankChannelMinSamples)
+	if err != nil || v < 1 {
+		return 8
+	}
+	return v
+}
+
+func channelMinModels() int {
+	v, err := op.SettingGetInt(model.SettingKeyAutoRankChannelMinModels)
+	if err != nil || v < 1 {
+		return 2
+	}
+	return v
+}
+
+func channelDegradeRate() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankChannelDegradeRate)
+	if err != nil {
+		return 0.85
+	}
+	if pct < 1 {
+		return 0.85
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return float64(pct) / 100.0
+}
+
+// targetFactorForRate 聚合成功率 -> 目标系数（分段）。
+func targetFactorForRate(rate float64) float64 {
+	switch {
+	case rate >= 0.9:
+		return 1.0
+	case rate >= 0.7:
+		return 0.6
+	case rate >= 0.5:
+		return 0.4
+	default:
+		return 0.3
+	}
+}
+
+// computeChannelAggregates 按渠道聚合组内模型的窗口统计（组内视角）。
+func computeChannelAggregates(items []model.GroupItem) map[int]channelAggregate {
+	aggs := make(map[int]channelAggregate, 8)
+	for _, item := range items {
+		a := aggs[item.ChannelID]
+		a.models++
+		st := GetAutoRankStats(item.ChannelID, item.ModelName)
+		if st.Samples > 0 {
+			a.totalSamples += st.Samples
+			a.totalFails += st.Failures
+			if st.Failures > 0 {
+				a.failModels++
+			}
+		}
+		aggs[item.ChannelID] = a
+	}
+	return aggs
+}
+
+// channelAggregateFactor 更新并返回某渠道的平滑系数（0.3~1.0）。
+// 判据：多模型同时失败（failModels >= minModels）且聚合成功率低于阈值；
+// 惩罚力度按样本置信度线性打折（ccLoad 式 min(1, samples/minSamples)），
+// 样本不足时部分生效而非全有全无，冷启动平滑；不满足判据时目标为 1.0。
+func channelAggregateFactor(channelID int, agg channelAggregate) float64 {
+	target := 1.0
+	if channelFactorEnabled() && agg.failModels >= channelMinModels() {
+		if rate := agg.rate(); rate < channelDegradeRate() {
+			base := targetFactorForRate(rate)
+			// 置信度线性打折：样本达到 minSamples 全额惩罚；不足按比例打折
+			confidence := 1.0
+			if minSamples := channelMinSamples(); minSamples > 0 {
+				confidence = math.Min(1.0, float64(agg.totalSamples)/float64(minSamples))
+			}
+			target = 1.0 - (1.0-base)*confidence
+		}
+	}
+
+	key := channelID
+	v, _ := globalChannelFactor.LoadOrStore(key, &channelFactorEntry{})
+	e := v.(*channelFactorEntry)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.inited {
+		e.factor = target
+		e.inited = true
+	} else {
+		e.factor = 0.7*e.factor + 0.3*target
+	}
+	e.lastSeen = time.Now()
+	return e.factor
+}
+
+// currentChannelFactor 只读当前平滑系数（不更新 lastSeen），供 sticky 决策。
+func currentChannelFactor(channelID int) float64 {
+	if v, ok := globalChannelFactor.Load(channelID); ok {
+		e := v.(*channelFactorEntry)
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.factor
+	}
+	return 1.0
+}
+
+// IsChannelDegraded 报告渠道是否处于聚合惩罚状态（系数 <1），
+// 供迭代器/会话粘性决策：被惩罚渠道不应被强制提前。
+func IsChannelDegraded(channelID int) bool {
+	return currentChannelFactor(channelID) < 0.99
+}
+
+// ---------------------------------------------------------------------------
+// 相对 TTFB 惩罚（ccLoad 式）：组内候选 EWMA 延迟中位数为基准，
+// 慢于中位数的模型按 (latency/median − 1) 上限 S_max 扣除得分，
+// 惩罚带置信度打折。只罚慢不奖快，适应"整体都慢/都快"的环境。
+// ---------------------------------------------------------------------------
+
+func ttfbEnabled() bool {
+	enabled, err := op.SettingGetBool(model.SettingKeyAutoRankTTFBEnabled)
+	if err != nil {
+		return false
+	}
+	return enabled
+}
+
+func ttfbWeight() int {
+	v, err := op.SettingGetInt(model.SettingKeyAutoRankTTFBWeight)
+	if err != nil || v < 0 {
+		return 20
+	}
+	return v
+}
+
+func ttfbMaxSlowRatio() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankTTFBMaxSlowRatio)
+	if err != nil || pct < 0 {
+		return 2.0
+	}
+	return float64(pct) / 100.0
+}
+
+func ttfbMinConfidentSample() int {
+	v, err := op.SettingGetInt(model.SettingKeyAutoRankTTFBMinConfidentSample)
+	if err != nil || v < 1 {
+		return 10
+	}
+	return v
+}
+
+// groupMedianLatencyMS 计算组内候选的有效 EWMA 延迟中位数（毫秒）。
+// 少于 2 个有效样本（延迟 >0）返回 0，表示不启用相对 TTFB 惩罚。
+func groupMedianLatencyMS(items []model.GroupItem) float64 {
+	var vals []float64
+	for _, item := range items {
+		st := GetAutoRankStats(item.ChannelID, item.ModelName)
+		if st.EWMALatencyMS > 0 {
+			vals = append(vals, st.EWMALatencyMS)
+		}
+	}
+	n := len(vals)
+	if n < 2 {
+		return 0
+	}
+	sort.Float64s(vals)
+	if n%2 == 1 {
+		return vals[n/2]
+	}
+	return (vals[n/2-1] + vals[n/2]) / 2
+}
+
+// ttfbPenalty 相对延迟惩罚：slow = clamp(latency/median − 1, 0, S_max)，
+// 惩罚 = slow × weight × confidence（样本置信度线性打折）。
+func ttfbPenalty(st AutoRankStats, medianMS float64) float64 {
+	if medianMS <= 0 || st.EWMALatencyMS <= 0 || st.Samples <= 0 {
+		return 0
+	}
+	sRatio := st.EWMALatencyMS / medianMS
+	slow := sRatio - 1.0
+	if slow < 0 {
+		slow = 0
+	}
+	if maxSlow := ttfbMaxSlowRatio(); maxSlow > 0 && slow > maxSlow {
+		slow = maxSlow
+	}
+	confidence := 1.0
+	if minConf := ttfbMinConfidentSample(); minConf > 0 {
+		confidence = math.Min(1.0, float64(st.Samples)/float64(minConf))
+	}
+	return slow * float64(ttfbWeight()) * confidence
+}
+
+// effectiveScore 模型在组内排序的有效得分：
+// 自身性能得分 × 渠道聚合系数 − 相对 TTFB 惩罚（medianMS<=0 时不启用）。
+// 同一渠道所有模型乘以相同系数 → 渠道内相对顺序不变（模型级隔离）。
+func effectiveScore(channelID int, st AutoRankStats, medianMS float64) float64 {
+	score := scoreFromStats(st) * currentChannelFactor(channelID)
+	if medianMS > 0 && ttfbEnabled() {
+		score -= ttfbPenalty(st, medianMS)
+	}
+	return score
+}
+
+// autoRankLessScored 带渠道聚合系数与相对 TTFB 惩罚的排序比较：
+// 档位逻辑同 autoRankLess，档2（样本充足）内比较 effectiveScore。
+func autoRankLessScored(aC int, a AutoRankStats, bC int, b AutoRankStats, medianMS float64) bool {
+	minSamples := autoRankMinSamples()
+	aNo, bNo := a.Samples == 0, b.Samples == 0
+	aLow := !aNo && a.Samples < minSamples
+	bLow := !bNo && b.Samples < minSamples
+	switch {
+	case aNo:
+		return false
+	case bNo:
+		return true
+	case aLow && bLow, !aLow && !bLow:
+		return effectiveScore(aC, a, medianMS) > effectiveScore(bC, b, medianMS)
+	case aLow:
+		return false
+	default: // bLow
+		return true
+	}
+}
+
 // RecordAutoSample 数据面采集：记录一次候选最终结果。
 // 成功时 durationMS 为转发耗时，用于 EWMA 延迟更新；失败时仅计入窗口失败数。
 func RecordAutoSample(channelID int, modelName string, success bool, durationMS int64) {
@@ -329,6 +617,7 @@ func AutoRankRestore(snaps []model.AutoRankSnapshot) {
 }
 
 // AutoRankReap 回收 lastSeen 早于 now-ttl 的窗口（已删除渠道/长期无流量）。
+// 同时回收渠道聚合系数的陈旧状态（纯内存，重启即清）。
 func AutoRankReap(now time.Time, ttl time.Duration) int {
 	if ttl <= 0 {
 		return 0
@@ -345,10 +634,21 @@ func AutoRankReap(now time.Time, ttl time.Duration) int {
 		e.mu.Unlock()
 		return true
 	})
+	globalChannelFactor.Range(func(key, value any) bool {
+		e := value.(*channelFactorEntry)
+		e.mu.Lock()
+		if e.lastSeen.Before(cutoff) {
+			globalChannelFactor.Delete(key)
+			reaped++
+		}
+		e.mu.Unlock()
+		return true
+	})
 	return reaped
 }
 
 // AutoRankReset 清空内存排序状态（测试用）。
 func AutoRankReset() {
 	globalAutoRank = sync.Map{}
+	globalChannelFactor = sync.Map{}
 }

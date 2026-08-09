@@ -4,8 +4,6 @@ export const SW_MESSAGE_TYPE = {
     CACHE_CLEARED: 'CACHE_CLEARED',
 } as const;
 
-export type SwMessageType = (typeof SW_MESSAGE_TYPE)[keyof typeof SW_MESSAGE_TYPE];
-
 // Keep in sync with `web/public/sw.js`
 export const OCTOPUS_CACHE_PREFIX = 'octopus-';
 // Font cache is version-independent and should persist across updates

@@ -6,7 +6,6 @@ import "time"
 type SiteChannelOutlierStatus string
 
 const (
-	OutlierStatusActive  SiteChannelOutlierStatus = "active"
 	OutlierStatusRetired SiteChannelOutlierStatus = "retired"
 )
 

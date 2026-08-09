@@ -185,10 +185,6 @@ func RelayLogPendingLen() int {
 	return len(relayLogPending)
 }
 
-func RelayLogDroppedTotal() uint64 {
-	return relayLogDroppedTotal.Load()
-}
-
 func relayLogDrainPending(ctx context.Context, maxBatches int) error {
 	if maxBatches <= 0 {
 		maxBatches = 1
@@ -471,7 +467,6 @@ const (
 // not meet the minimum length requirement enforced by the backend.
 var (
 	ErrRelayLogContainsKeywordTooShort = &RelayLogFilterError{Code: "keyword_too_short", Message: "contains search requires keyword of at least 3 characters"}
-	ErrRelayLogContainsWindowMissing   = &RelayLogFilterError{Code: "time_window_required", Message: "contains search requires an explicit time range"}
 	ErrRelayLogContainsWindowTooWide   = &RelayLogFilterError{Code: "time_window_too_wide", Message: "contains search time window must be at most 7 days"}
 )
 

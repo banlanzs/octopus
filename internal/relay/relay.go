@@ -148,17 +148,18 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 
 	// 请求级上下文
 	req := &relayRequest{
-		c:               c,
-		inAdapter:       inAdapter,
-		internalRequest: internalRequest,
-		metrics:         metrics,
-		apiKeyID:        apiKeyID,
-		requestModel:    requestModel,
-		groupID:         group.ID,
-		groupSessionTTL: group.SessionKeepTime,
-		iter:            iter,
-		rawBody:         rawBody,
-		heartbeat:       hb,
+		c:                          c,
+		inAdapter:                  inAdapter,
+		internalRequest:            internalRequest,
+		metrics:                    metrics,
+		apiKeyID:                   apiKeyID,
+		requestModel:               requestModel,
+		groupID:                    group.ID,
+		groupSessionTTL:            group.SessionKeepTime,
+		iter:                       iter,
+		rawBody:                    rawBody,
+		heartbeat:                  hb,
+		responsesPassthroughRequired: responsesPassthroughRequired,
 	}
 
 	var lastErr error
@@ -194,6 +195,11 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		}
 		if !channel.Enabled {
 			iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
+			continue
+		}
+		// 渠道级熔断：整渠道熔断时跳过（粒度高于 key 级熔断，渠道整体故障快速摘除）
+		if tripped, remaining := balancer.IsChannelTripped(channel.ID); tripped {
+			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("channel circuit breaker tripped, remaining cooldown: %ds", int(remaining.Seconds())))
 			continue
 		}
 		if responsesPassthroughRequired {
@@ -295,7 +301,16 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			failureKind := circuitFailureKind(group.RetryEnabled, result.StatusCode)
 			balancer.RecordFailure(channel.ID, usedKey.ID, internalRequest.Model, failureKind)
 			outlierwindow.Report(channel.ID, false, result.StatusCode, time.Now())
-			balancer.RecordAutoSample(channel.ID, internalRequest.Model, false, result.DurationMS)
+			// 统计口径过滤：仅渠道/Key 质量问题计入 AutoRank 失败样本。
+			// 客户端误用(404/415 等)、取消(499)、限流(429)、配额(596)等噪音不计，
+			// 避免"坏客户端把好渠道打残"（渠道聚合样本同样受益于模型窗口过滤）。
+			if isAutoRankCountableFailure(result.StatusCode) {
+				balancer.RecordAutoSample(channel.ID, internalRequest.Model, false, result.DurationMS)
+			}
+			// 渠道级冷却信号：仅渠道服务/网络问题计入渠道熔断（Key 级 401/403、429 不计）
+			if balancer.IsChannelLevelFailure(result.StatusCode) {
+				balancer.RecordChannelFailure(channel.ID, failureKind)
+			}
 			if failureKind == balancer.FailureHard {
 				maybeLearnManagedRoute(c.Request.Context(), channel.ID, internalRequest.Model, inboundType, result.Err)
 			}
@@ -304,6 +319,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		if result.Success {
 			outlierwindow.Report(channel.ID, true, result.StatusCode, time.Now())
 			balancer.RecordAutoSample(channel.ID, internalRequest.Model, true, result.DurationMS)
+			balancer.RecordChannelSuccess(channel.ID)
 
 			// === HTTP Replay 状态保存 ===
 			// 成功后，如果是 OpenAI Responses HTTP 请求，保存 replay 状态供后续续接
@@ -377,6 +393,56 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		hb.FlushOrError(c, http.StatusBadRequest, "当前请求包含 OpenAI Responses 原生工具，仅支持 OpenAI Responses 通道直通")
 		return
 	}
+
+	// === 全冷却兜底 ===
+	// 所有候选均因熔断/冷却被跳过（无任何真实尝试）时，选渠道级熔断中最早
+	// 恢复的渠道穿透冷却探测一次，避免全渠道故障时直接 502。探测失败会让
+	// 熔断器 HalfOpen→Open 且退避翻倍（语义与 HalfOpen 探测一致），成功则恢复。
+	if !hasRealAttempt(iter.Attempts()) {
+		// Responses 原生能力约束：兜底候选先按能力过滤，避免探测非 OpenAI Response 渠道
+		fallbackItems := group.Items
+		if responsesPassthroughRequired {
+			fallbackItems = filterPassthroughCapableItems(group.Items, c.Request.Context())
+		}
+		if item, ok := balancer.EarliestRecoveryChannel(fallbackItems); ok {
+			// 探测节流：同一渠道在最小间隔内只放行一次真实上游探测，
+			// 防止全渠道故障风暴时反复打爆已挂供应商。
+			if !balancer.TryAcquireFallbackProbe(item.ChannelID) {
+				log.Debugf("fallback probe throttled for channel=%d", item.ChannelID)
+			} else {
+				log.Warnf("all candidates circuit-broken, fallback probing earliest recovery channel=%d", item.ChannelID)
+				result, tried := req.fallbackAttempt(item, group, inboundType)
+				if tried {
+					if result.Success {
+						metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
+						return
+					}
+					if result.Written {
+						// 部分流已写出：立即结束（与主循环一致，不再兜底/透传错误）
+						metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+						return
+					}
+					if result.ResetConversation {
+						// 会话重置语义：镜像主循环，映射 WS 公共错误后结束
+						metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+						if publicErr, ok := classifyWSPublicError(result.Err, result.StatusCode); ok {
+							hb.FlushOrError(c, publicErr.Status, publicErr.Message)
+						} else {
+							hb.FlushOrError(c, result.StatusCode, result.Err.Error())
+						}
+						return
+					}
+					lastErr = result.Err
+					lastResult = result
+					if result.Canceled {
+						metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+						return
+					}
+				}
+			}
+		}
+	}
+
 	metrics.SaveWithChannelStats(c.Request.Context(), false, lastErr, iter.Attempts(), false)
 
 	// 透传 429/503 状态码和 Retry-After 头，让客户端 SDK 的重试机制接管
@@ -401,9 +467,88 @@ func circuitFailureKind(retryEnabled bool, statusCode int) balancer.FailureKind 
 	return balancer.FailureHard
 }
 
+// hasRealAttempt 判断迭代器记录中是否存在真实转发尝试（非 skip/熔断跳过）。
+// 全部候选都被跳过时返回 false，用于触发全冷却兜底。
+func hasRealAttempt(attempts []dbmodel.ChannelAttempt) bool {
+	for _, a := range attempts {
+		switch a.Status {
+		case dbmodel.AttemptSkipped, dbmodel.AttemptCircuitBreak:
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// filterPassthroughCapableItems 仅保留 OpenAI Response 渠道的候选
+//（OpenAI Responses 原生能力约束，兜底探测不得转发到其他渠道类型）。
+func filterPassthroughCapableItems(items []dbmodel.GroupItem, ctx context.Context) []dbmodel.GroupItem {
+	out := make([]dbmodel.GroupItem, 0, len(items))
+	for _, it := range items {
+		ch, err := op.ChannelGet(it.ChannelID, ctx)
+		if err != nil || !ch.Enabled || ch.Type != outbound.OutboundTypeOpenAIResponse {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// fallbackAttempt 全冷却兜底的单次探测尝试：跳过熔断检查直接转发一次，
+// 并按主循环一致的逻辑记录熔断/AutoRank/渠道信号。tried=false 表示无法构造
+// 尝试（渠道缺失/禁用/无 key/适配器缺失/passthrough 能力不符），不参与结果判定。
+func (req *relayRequest) fallbackAttempt(item dbmodel.GroupItem, group dbmodel.Group, inboundType inbound.InboundType) (attemptResult, bool) {
+	ctx := req.c.Request.Context()
+	channel, err := op.ChannelGet(item.ChannelID, ctx)
+	if err != nil || !channel.Enabled {
+		return attemptResult{}, false
+	}
+	outAdapter := outbound.Get(channel.Type)
+	if outAdapter == nil {
+		return attemptResult{}, false
+	}
+	// OpenAI Responses 原生能力约束：兜底探测同样只允许 OpenAI Response 渠道
+	if req.responsesPassthroughRequired && channel.Type != outbound.OutboundTypeOpenAIResponse {
+		return attemptResult{}, false
+	}
+	req.internalRequest.Model = item.ModelName
+	usedKey := channel.GetChannelKey()
+	if usedKey.ChannelKey == "" {
+		return attemptResult{}, false
+	}
+	ra := &relayAttempt{
+		relayRequest:         req,
+		outAdapter:           outAdapter,
+		channel:              channel,
+		usedKey:              usedKey,
+		firstTokenTimeOutSec: group.FirstTokenTimeOut,
+	}
+	result := ra.attempt()
+	if !result.Success && !result.Written && !result.Canceled && !result.ResetConversation {
+		failureKind := circuitFailureKind(group.RetryEnabled, result.StatusCode)
+		balancer.RecordFailure(channel.ID, usedKey.ID, req.internalRequest.Model, failureKind)
+		outlierwindow.Report(channel.ID, false, result.StatusCode, time.Now())
+		if isAutoRankCountableFailure(result.StatusCode) {
+			balancer.RecordAutoSample(channel.ID, req.internalRequest.Model, false, result.DurationMS)
+		}
+		if balancer.IsChannelLevelFailure(result.StatusCode) {
+			balancer.RecordChannelFailure(channel.ID, failureKind)
+		}
+		if failureKind == balancer.FailureHard {
+			maybeLearnManagedRoute(ctx, channel.ID, req.internalRequest.Model, inboundType, result.Err)
+		}
+	} else if result.Success {
+		outlierwindow.Report(channel.ID, true, result.StatusCode, time.Now())
+		balancer.RecordAutoSample(channel.ID, req.internalRequest.Model, true, result.DurationMS)
+		balancer.RecordChannelSuccess(channel.ID)
+	}
+	return result, true
+}
+
 // attempt 统一管理一次通道尝试的完整生命周期
 func (ra *relayAttempt) attempt() attemptResult {
-	span := ra.iter.StartAttempt(ra.channel.ID, ra.usedKey.ID, ra.channel.Name)
+	span := ra.iter.StartAttempt(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, ra.internalRequest.Model)
 
 	// 转发请求
 	statusCode, fwdErr := ra.forward()
@@ -1388,110 +1533,3 @@ func (ra *relayAttempt) collectResponse() {
 	ra.metrics.SetInternalResponse(internalResponse, actualModel)
 }
 
-func (ra *relayAttempt) collectOpenAIResponsesPassthroughMetrics(ctx context.Context, rawStream []byte) {
-	if len(rawStream) == 0 {
-		return
-	}
-	outEventAdapter, outOk := ra.outAdapter.(model.OutboundStreamEventTransformer)
-	inEventAdapter, inOk := ra.inAdapter.(model.InboundStreamEventTransformer)
-	if outOk && inOk {
-		readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-		for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-			if err != nil {
-				log.Debugf("openai responses passthrough metrics parse skipped: %v", err)
-				return
-			}
-			if events, terr := outEventAdapter.TransformStreamEvent(ctx, []byte(ev.Data)); terr == nil && len(events) > 0 {
-				_, _ = inEventAdapter.TransformStreamEvents(ctx, events)
-			}
-		}
-		return
-	}
-	readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-	for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-		if err != nil {
-			log.Debugf("openai responses passthrough metrics parse skipped: %v", err)
-			return
-		}
-		if internalStream, terr := ra.outAdapter.TransformStream(ctx, []byte(ev.Data)); terr == nil && internalStream != nil {
-			_, _ = ra.inAdapter.TransformStream(ctx, internalStream)
-		}
-	}
-}
-
-// responsesPassthroughTerminalEvents / anthropicPassthroughTerminalEvents 定义各协议
-// SSE 流的终态事件类型；缓存流中出现终态事件即视为上游响应已完整送达。
-var (
-	responsesPassthroughTerminalEvents = map[string]struct{}{
-		"response.completed":  {},
-		"response.failed":     {},
-		"response.incomplete": {},
-		"error":               {},
-	}
-	anthropicPassthroughTerminalEvents = map[string]struct{}{
-		"message_stop": {},
-		"error":        {},
-	}
-)
-
-// streamReachedTerminalEvent 报告缓存的原始 SSE 流是否已包含协议终态事件。
-// 客户端 SDK 收到终态事件后会立即断连而不等上游 EOF，断连取消会沿出站请求
-// 传播打断上游读取；此时读取被取消不代表流未完成。
-func streamReachedTerminalEvent(rawStream []byte, terminalTypes map[string]struct{}) bool {
-	if len(rawStream) == 0 {
-		return false
-	}
-	readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-	for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-		if err != nil {
-			break
-		}
-		typ := strings.TrimSpace(ev.Type)
-		if typ == "" {
-			var head struct {
-				Type string `json:"type"`
-			}
-			if json.Unmarshal([]byte(ev.Data), &head) == nil {
-				typ = head.Type
-			}
-		}
-		if _, ok := terminalTypes[typ]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-// forwardViaHTTPStandard 是 forwardViaHTTP 的原路径（直通判定失败时的兜底）。
-// 留作显式出口，避免 passthrough 失败时的递归。
-
-func (ra *relayAttempt) collectAnthropicPassthroughMetrics(ctx context.Context, rawStream []byte) {
-	if len(rawStream) == 0 {
-		return
-	}
-	outEventAdapter, outOk := ra.outAdapter.(model.OutboundStreamEventTransformer)
-	inEventAdapter, inOk := ra.inAdapter.(model.InboundStreamEventTransformer)
-	if outOk && inOk {
-		readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-		for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-			if err != nil {
-				log.Debugf("anthropic passthrough metrics parse skipped: %v", err)
-				return
-			}
-			if events, terr := outEventAdapter.TransformStreamEvent(ctx, []byte(ev.Data)); terr == nil && len(events) > 0 {
-				_, _ = inEventAdapter.TransformStreamEvents(ctx, events)
-			}
-		}
-		return
-	}
-	readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-	for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-		if err != nil {
-			log.Debugf("anthropic passthrough metrics parse skipped: %v", err)
-			return
-		}
-		if internalStream, terr := ra.outAdapter.TransformStream(ctx, []byte(ev.Data)); terr == nil && internalStream != nil {
-			_, _ = ra.inAdapter.TransformStream(ctx, internalStream)
-		}
-	}
-}

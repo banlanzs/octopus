@@ -21,10 +21,6 @@
     "apiKeyDashboard": {
         "error": "Failed to load data",
         "logout": "Logout",
-        "requestStats": "Request Stats",
-        "totalStats": "Total Stats",
-        "inputStats": "Input Stats",
-        "outputStats": "Output Stats",
         "requestCount": "Requests",
         "timeConsumed": "Time Consumed",
         "totalToken": "Tokens Used",
@@ -35,8 +31,6 @@
         "outputCost": "Output Cost",
         "successRequests": "Successful",
         "failedRequests": "Failed",
-        "quota": "Remaining Quota",
-        "unlimited": "Unlimited",
         "expireAt": "Expires",
         "neverExpire": "Never",
         "daysLeft": "days left",
@@ -48,7 +42,6 @@
         "site": "Site",
         "channel": "Channel",
         "group": "Group",
-        "key": "Key",
         "model": "Price",
         "log": "Log",
         "setting": "Setting"
@@ -66,10 +59,7 @@
             "createdDesc": "Time Desc",
             "balanceDesc": "Balance High to Low",
             "balanceAsc": "Balance Low to High",
-            "asc": "Asc",
-            "desc": "Desc",
             "logRefresh": {
-                "refresh": "Refresh logs"
             },
             "logFilter": {
                 "title": "Log filters",
@@ -293,7 +283,6 @@
             },
             "import": {
                 "title": "Import (Incremental)",
-                "selected": "File selected",
                 "button": "Import JSON",
                 "importing": "Importing...",
                 "noFile": "Please select a JSON file first",
@@ -388,8 +377,6 @@
             "title": "Version Info",
             "currentVersion": "Current Version",
             "latestVersion": "Latest Version",
-            "buildTime": "Build Time",
-            "publishedAt": "Published At",
             "github": "GitHub Repository",
             "unknown": "Unknown",
             "versionMismatch": "Version Mismatch",
@@ -507,22 +494,16 @@
             "restoreSuccess": "Restore successful",
             "restoreFailed": "Restore failed",
             "restoreConfirm": "Restore from this backup? Existing data will be incrementally overwritten.",
-            "fileName": "File Name",
-            "fileSize": "Size",
-            "modifiedAt": "Modified",
-            "refresh": "Refresh",
-            "notConfigured": "WebDAV not configured"
+            "refresh": "Refresh"
         }
     },
     "group": {
         "toast": {
-            "created": "Created successfully",
             "createFailed": "Create failed",
             "updated": "Updated successfully",
             "updateFailed": "Update failed",
             "deleted": "Deleted successfully",
             "deleteFailed": "Delete failed",
-            "autoAddFailed": "Auto add failed",
             "pinned": "Pinned",
             "unpinned": "Unpinned",
             "pinFailed": "Pin toggle failed"
@@ -539,7 +520,6 @@
             "cloneSuffix": "copy",
             "namePlaceholder": "Preset name",
             "name": "Preset Name",
-            "close": "Close",
             "loading": "Loading...",
             "empty": "No presets yet",
             "activeBadge": "Active",
@@ -599,9 +579,7 @@
             "items": "Selected Models",
             "addItem": "Add Model",
             "autoAdd": "Auto Add",
-            "clear": "Clear",
-            "selectChannel": "Channel",
-            "selectModel": "Model"
+            "clear": "Clear"
         },
         "mode": {
             "roundRobin": "Round Robin",
@@ -738,10 +716,7 @@
             "noMore": "No more logs"
         },
         "card": {
-            "error": "Error",
             "errorInfo": "Error Info",
-            "firstToken": "TTFT",
-            "totalTime": "Total",
             "duration": "Latency",
             "input": "Input",
             "output": "Output",
@@ -753,7 +728,6 @@
             "responseContent": "Response Content",
             "noRequestContent": "(No request content)",
             "noResponseContent": "(No response content)",
-            "firstTokenTime": "First Token Time",
             "tokens": "tokens",
             "retryDetails": "Retry Details",
             "attempts": "attempts",
@@ -780,29 +754,7 @@
             "wsReconnectHint": "The upstream WebSocket continuation broke, and this request recovered after reconnecting the same route.",
             "wsReplayRecoveryHint": "This request first failed to continue, then automatically replayed the transcript to recover the context and establish a new continuation anchor.",
             "wsDowngradeHint": "This request first tried upstream WebSocket, but automatically downgraded to HTTP when WebSocket was unavailable.",
-            "inputDetails": "Input Details",
-            "transportInput": "Transport Input",
-            "billInput": "Billed Input",
-            "cacheRead": "Cache Read",
-            "cacheWrite": "Cache Write",
             "reasoningEffort": "Reasoning"
-        },
-        "filters": {
-            "keywordPlaceholder": "Search model, API key or content",
-            "channel": "Channel",
-            "allChannels": "All channels",
-            "status": "Status",
-            "allStatus": "All status",
-            "success": "Success",
-            "error": "Error",
-            "reset": "Reset",
-            "refresh": "Refresh"
-        },
-        "pagination": {
-            "prev": "Prev",
-            "next": "Next",
-            "page": "Page {page}",
-            "pagesRange": "Pages {from}–{to}"
         }
     },
     "channel": {
@@ -865,20 +817,16 @@
             "type": "Channel Type",
             "baseUrls": "Base URLs",
             "baseUrlUrl": "URL",
-            "baseUrlDelay": "Delay(ms)",
             "advanced": "Advanced Settings",
             "apiKey": "API Key",
             "customHeader": "Custom Headers",
             "customHeaderKey": "Header Key",
             "customHeaderValue": "Header Value",
             "customHeaderAdd": "Add Header",
-            "channelProxy": "Channel Proxy",
-            "channelProxyPlaceholder": "Optional: proxy for this channel (overrides global proxy)",
             "paramOverride": "Param Override",
             "paramOverridePlaceholder": "Optional: JSON string to override request params",
             "model": "Model",
             "enabled": "Enabled",
-            "proxy": "Use Proxy",
             "modelCustomPlaceholder": "Custom model name",
             "modelAdd": "Add",
             "modelRefresh": "Refresh",
@@ -896,11 +844,6 @@
             "typeVolcengine": "Volcengine",
             "autoSync": "Auto Sync",
             "forceDeepSeekThinking": "DeepSeek Thinking Param",
-            "autoGroup": "Auto Group",
-            "autoGroupNone": "None",
-            "autoGroupFuzzy": "Fuzzy",
-            "autoGroupExact": "Exact",
-            "autoGroupRegex": "Regex",
             "wsMode": "Responses WS Mode",
             "wsModeInherit": "Inherit global",
             "wsModePassthrough": "Passthrough",

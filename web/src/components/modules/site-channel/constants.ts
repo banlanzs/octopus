@@ -1,5 +1,4 @@
 import type { SiteModelRouteSource, SiteModelRouteType } from '@/api/endpoints/site-channel';
-import { ChannelType } from '@/api/endpoints/channel';
 
 export const SITE_ROUTE_COLUMN_ORDER: SiteModelRouteType[] = [
     'openai_chat',
@@ -14,17 +13,6 @@ export const SITE_ROUTE_DISPLAY_ORDER: SiteModelRouteType[] = [
     ...SITE_ROUTE_COLUMN_ORDER,
     'unknown',
 ];
-
-export const SITE_ROUTE_TO_CHANNEL_TYPE: Record<Exclude<SiteModelRouteType, 'unknown'>, ChannelType> = {
-    openai_chat: ChannelType.OpenAIChat,
-    openai_response: ChannelType.OpenAIResponse,
-    anthropic: ChannelType.Anthropic,
-    gemini: ChannelType.Gemini,
-    volcengine: ChannelType.Volcengine,
-    openai_embedding: ChannelType.OpenAIEmbedding,
-};
-
-export const ROUTE_COLUMN_KEY_PREFIX = 'site-route-column';
 
 export function getRouteTypeTone(routeType: SiteModelRouteType) {
     switch (routeType) {

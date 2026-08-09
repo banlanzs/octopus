@@ -10,7 +10,6 @@ import (
 
 const (
 	CodeSiteSyncMissingGroupKey       = "site.sync.missing_group_key"
-	CodeSiteSyncGroupModelsUnresolved = "site.sync.group_models_unresolved"
 	CodeSiteSyncNoGroupResult         = "site.sync.no_group_result"
 	CodeSiteSyncAllGroupsUnresolved   = "site.sync.all_groups_unresolved"
 	CodeSiteSyncUnsupportedPlatform   = "site.sync.unsupported_platform"

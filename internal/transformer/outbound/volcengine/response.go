@@ -92,7 +92,6 @@ type ResponsesRequest struct {
 type ThinkingType string
 
 const (
-	ThinkingTypeAuto     ThinkingType = "auto"
 	ThinkingTypeDisabled ThinkingType = "disabled"
 	ThinkingTypeEnabled  ThinkingType = "enabled"
 )

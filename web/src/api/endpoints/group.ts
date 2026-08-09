@@ -158,10 +158,6 @@ export interface GroupAutoGroupConfigUpdateRequest {
     run_now?: boolean;
 }
 
-export interface GroupAutoGroupRunRequest {
-    channel_ids?: number[];
-}
-
 /**
  * 获取分组列表 Hook
  * 
@@ -363,22 +359,6 @@ export function useUpdateGroupAutoGroupConfig() {
         },
         onError: (error) => {
             logger.error('自动分组配置更新失败:', error);
-        },
-    });
-}
-
-export function useRunGroupAutoGroup() {
-    const queryClient = useQueryClient();
-
-    return useMutation({
-        mutationFn: async (data: GroupAutoGroupRunRequest = {}) =>
-            apiClient.post<null>('/api/v1/group/auto-group/run', data),
-        onSuccess: () => {
-            logger.log('自动分组执行成功');
-            invalidateAutoGroupRelated(queryClient);
-        },
-        onError: (error) => {
-            logger.error('自动分组执行失败:', error);
         },
     });
 }

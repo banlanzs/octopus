@@ -210,14 +210,3 @@ func (s *Schema) ToOpenAIResponseFormat() (json.RawMessage, error) {
 	}
 	return json.Marshal(s)
 }
-
-// ToAnthropicToolInputSchema emits the schema for use as an Anthropic
-// `tool.input_schema`. Anthropic accepts standard Draft-07 so this is
-// effectively a re-serialisation, but we normalise `$ref` / `additionalProperties`
-// handling because Anthropic's validator is stricter than OpenAI's on those.
-func (s *Schema) ToAnthropicToolInputSchema() (json.RawMessage, error) {
-	if s == nil {
-		return nil, nil
-	}
-	return json.Marshal(s)
-}

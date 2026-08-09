@@ -12,10 +12,6 @@ import (
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
-func ChannelHttpClient(channel *model.Channel) (*http.Client, error) {
-	return ChannelHTTPClientWithContext(context.Background(), channel)
-}
-
 func ChannelHTTPClientWithContext(ctx context.Context, channel *model.Channel) (*http.Client, error) {
 	if channel == nil {
 		return nil, errors.New("channel is nil")

@@ -8,21 +8,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 )
 
 type APIFormat string
 
 const (
-	APIFormatOpenAIChatCompletion  APIFormat = "openai/chat_completions"
-	APIFormatOpenAIResponse        APIFormat = "openai/responses"
-	APIFormatOpenAIImageGeneration APIFormat = "openai/image_generation"
-	APIFormatOpenAIEmbedding       APIFormat = "openai/embeddings"
-	APIFormatGeminiContents        APIFormat = "gemini/contents"
-	APIFormatAnthropicMessage      APIFormat = "anthropic/messages"
-	APIFormatAiSDKText             APIFormat = "aisdk/text"
-	APIFormatAiSDKDataStream       APIFormat = "aisdk/datastream"
+	APIFormatOpenAIChatCompletion APIFormat = "openai/chat_completions"
+	APIFormatOpenAIResponse       APIFormat = "openai/responses"
+	APIFormatOpenAIEmbedding      APIFormat = "openai/embeddings"
+	APIFormatGeminiContents       APIFormat = "gemini/contents"
+	APIFormatAnthropicMessage     APIFormat = "anthropic/messages"
 )
 
 const (
@@ -675,10 +671,6 @@ func (r *InternalLLMRequest) EnforceMessageAlternation(provider AlternationProvi
 	r.Messages = EnforceAlternation(r.Messages, provider)
 }
 
-func (r *InternalLLMRequest) IsImageGenerationRequest() bool {
-	return len(r.Modalities) > 0 && slices.Contains(r.Modalities, "image")
-}
-
 type TransformOptions struct {
 	// ArrayInputs specifies whether the original input was an array.
 	ArrayInputs *bool `json:"-"`
@@ -956,11 +948,6 @@ func (m *Message) GetReasoningContent() string {
 		return *m.Reasoning
 	}
 	return ""
-}
-
-// SetReasoningContent sets the reasoning content to the ReasoningContent field.
-func (m *Message) SetReasoningContent(s string) {
-	m.ReasoningContent = &s
 }
 
 type MessageContent struct {
@@ -1378,11 +1365,6 @@ func (r *InternalLLMResponse) IsEmbeddingResponse() bool {
 	return len(r.EmbeddingData) > 0
 }
 
-// IsChatResponse returns true if this is a chat completion response.
-func (r *InternalLLMResponse) IsChatResponse() bool {
-	return len(r.Choices) > 0
-}
-
 // Choice represents a choice in the response.
 // Choice represents a choice in the response.
 type Choice struct {
@@ -1537,11 +1519,6 @@ type TopLogprob struct {
 	Bytes   []int   `json:"bytes,omitempty"`
 }
 
-type ResponseMeta struct {
-	ID    string `json:"id"`
-	Usage *Usage `json:"usage"`
-}
-
 // Usage Represents the total token usage per request to OpenAI.
 // For embedding requests, CompletionTokens is always 0.
 //
@@ -1578,22 +1555,6 @@ type Usage struct {
 	CacheCreation5mInputTokens int64 `json:"cache_creation_5m_input_tokens,omitempty"`
 	CacheCreation1hInputTokens int64 `json:"cache_creation_1h_input_tokens,omitempty"`
 	CacheReadInputTokens       int64 `json:"cache_read_input_tokens,omitempty"`
-}
-
-func (u *Usage) GetCompletionTokens() *int64 {
-	if u == nil {
-		return nil
-	}
-
-	return &u.CompletionTokens
-}
-
-func (u *Usage) GetPromptTokens() *int64 {
-	if u == nil {
-		return nil
-	}
-
-	return &u.PromptTokens
 }
 
 // HasAnthropicCacheSemantic reports whether PromptTokens excludes cached tokens

@@ -7,21 +7,15 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/price"
+	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
 const (
-	TaskPriceUpdate       = "price_update"
 	TaskStatsSave         = "stats_save"
 	TaskRelayLogSave      = "relay_log_save"
-	TaskSyncLLM           = "sync_llm"
-	TaskCleanLLM          = "clean_llm"
 	TaskBaseUrlDelay      = "base_url_delay"
-	TaskSiteSync          = "site_sync"
-	TaskSiteCheckin       = "site_checkin"
 	TaskWSAffinityCleanup = "ws_affinity_cleanup"
-	TaskWebDAVBackup      = "webdav_backup"
-	TaskAutoRank          = "auto_rank"
 )
 
 func Init() {
@@ -66,14 +60,19 @@ func Init() {
 	siteCheckinInterval := time.Duration(siteCheckinIntervalHours) * time.Hour
 	Register(string(model.SettingKeySiteCheckinInterval), siteCheckinInterval, true, SiteCheckinTask)
 
-	// 注册统计保存任务
+	// 注册统计保存任务（顺带回收熔断器空闲条目，防止 (channel,key,model) 无界增长）
 	statsSaveIntervalMinutes, err := op.SettingGetInt(model.SettingKeyStatsSaveInterval)
 	if err != nil {
 		log.Warnf("failed to get stats save interval: %v", err)
 		return
 	}
 	statsSaveInterval := time.Duration(statsSaveIntervalMinutes) * time.Minute
-	Register(TaskStatsSave, statsSaveInterval, false, op.StatsSaveDBTask)
+	Register(TaskStatsSave, statsSaveInterval, false, func() {
+		op.StatsSaveDBTask()
+		if reaped := balancer.ReapBreakers(time.Now(), 30*time.Minute); reaped > 0 {
+			log.Debugf("circuit breaker reaped %d idle entries", reaped)
+		}
+	})
 	// 注册中继日志保存任务
 	Register(TaskRelayLogSave, time.Hour, false, func() {
 		if err := op.RelayLogSaveDBTask(context.Background()); err != nil {

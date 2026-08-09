@@ -657,14 +657,3 @@ export function useSiteBatchEdit() {
     onError: (error) => logger.error("批量编辑失败:", error),
   });
 }
-
-export function useSiteAvailableModels(siteId: number | null) {
-  return useQuery({
-    queryKey: ["sites", "available-models", siteId],
-    queryFn: async () =>
-      apiClient.get<{ site_id: number; models: string[] }>(
-        `/api/v1/site/${siteId}/available-models`,
-      ),
-    enabled: siteId != null && siteId > 0,
-  });
-}

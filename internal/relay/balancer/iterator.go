@@ -52,17 +52,21 @@ func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel str
 	if stickyIdx < 0 && group.SessionKeepTime > 0 {
 		stickyTTL := time.Duration(group.SessionKeepTime) * time.Second
 		if sticky := GetSticky(apiKeyID, requestModel, stickyTTL); sticky != nil {
-			for i, item := range candidates {
-				if item.ChannelID == sticky.ChannelID {
-					if i > 0 {
-						// 将粘性通道移到最前面
-						stickyItem := candidates[i]
-						copy(candidates[1:i+1], candidates[0:i])
-						candidates[0] = stickyItem
+			// 会话粘性不绕过渠道级聚合惩罚：被惩罚渠道不强制提前到首位
+			// （replay 硬粘性走上面的 preferred 分支，保持强制）。
+			if !IsChannelDegraded(sticky.ChannelID) {
+				for i, item := range candidates {
+					if item.ChannelID == sticky.ChannelID {
+						if i > 0 {
+							// 将粘性通道移到最前面
+							stickyItem := candidates[i]
+							copy(candidates[1:i+1], candidates[0:i])
+							candidates[0] = stickyItem
+						}
+						stickyIdx = 0
+						stickyKeyID = sticky.ChannelKeyID
+						break
 					}
-					stickyIdx = 0
-					stickyKeyID = sticky.ChannelKeyID
-					break
 				}
 			}
 		}
@@ -150,15 +154,17 @@ func (it *Iterator) SkipCircuitBreak(channelID, channelKeyID int, channelName st
 	return true
 }
 
-// StartAttempt 开始一次真实转发尝试，返回 Span 用于记录结果
-func (it *Iterator) StartAttempt(channelID, channelKeyID int, channelName string) *AttemptSpan {
+// StartAttempt 开始一次真实转发尝试，返回 Span 用于记录结果。
+// modelName 由调用方传入（当前尝试的模型名），不依赖 candidates 索引——
+// 全冷却兜底等"迭代器已耗尽后"的探测场景同样安全。
+func (it *Iterator) StartAttempt(channelID, channelKeyID int, channelName, modelName string) *AttemptSpan {
 	it.count++
 	return &AttemptSpan{
 		attempt: model.ChannelAttempt{
 			ChannelID:    channelID,
 			ChannelKeyID: channelKeyID,
 			ChannelName:  channelName,
-			ModelName:    it.candidates[it.index].ModelName,
+			ModelName:    modelName,
 			AttemptNum:   it.count,
 			Sticky:       it.IsSticky(),
 		},

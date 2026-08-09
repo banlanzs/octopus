@@ -351,37 +351,6 @@ func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context
 	return nil
 }
 
-func GroupItemUpdate(item *model.GroupItem, ctx context.Context) error {
-	if err := db.GetDB().WithContext(ctx).Model(item).
-		Select("ModelName", "Priority", "Weight").
-		Updates(item).Error; err != nil {
-		return err
-	}
-
-	if err := groupRefreshCacheByID(item.GroupID, ctx); err != nil {
-		return err
-	}
-	resetBalancerStateForChannel(item.ChannelID)
-	return nil
-}
-
-func GroupItemDel(id int, ctx context.Context) error {
-	var item model.GroupItem
-	if err := db.GetDB().WithContext(ctx).First(&item, id).Error; err != nil {
-		return fmt.Errorf("group item not found")
-	}
-
-	if err := db.GetDB().WithContext(ctx).Delete(&item).Error; err != nil {
-		return err
-	}
-
-	if err := groupRefreshCacheByID(item.GroupID, ctx); err != nil {
-		return err
-	}
-	resetBalancerStateForChannel(item.ChannelID)
-	return nil
-}
-
 // GroupItemBatchDelByChannelAndModels 根据渠道ID和模型名称批量删除分组项
 func GroupItemBatchDelByChannelAndModels(keys []model.GroupIDAndLLMName, ctx context.Context) error {
 	if len(keys) == 0 {

@@ -22,7 +22,6 @@ const (
 	Blue   string = "\033[34m"
 	Purple string = "\033[35m"
 	Cyan   string = "\033[36m"
-	White  string = "\033[37m"
 	Bold   string = "\033[1m"
 	Dim    string = "\033[2m"
 )

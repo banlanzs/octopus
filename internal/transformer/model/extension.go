@@ -5,16 +5,6 @@ import (
 	"strings"
 )
 
-type ProviderExtensionNamespace string
-
-const (
-	ProviderExtensionNamespaceCommon     ProviderExtensionNamespace = "common"
-	ProviderExtensionNamespaceAnthropic  ProviderExtensionNamespace = "anthropic"
-	ProviderExtensionNamespaceGemini     ProviderExtensionNamespace = "gemini"
-	ProviderExtensionNamespaceOpenAI     ProviderExtensionNamespace = "openai"
-	ProviderExtensionNamespaceVolcengine ProviderExtensionNamespace = "volcengine"
-)
-
 type ProviderExtensions struct {
 	Common     *CommonExtension     `json:"common,omitempty"`
 	Anthropic  *AnthropicExtension  `json:"anthropic,omitempty"`

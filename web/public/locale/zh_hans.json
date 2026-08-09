@@ -21,10 +21,6 @@
     "apiKeyDashboard": {
         "error": "加载数据失败",
         "logout": "退出",
-        "requestStats": "请求统计",
-        "totalStats": "全部统计",
-        "inputStats": "输入统计",
-        "outputStats": "输出统计",
         "requestCount": "请求次数",
         "timeConsumed": "消耗时间",
         "totalToken": "消耗 Token",
@@ -35,8 +31,6 @@
         "outputCost": "输出费用",
         "successRequests": "成功请求",
         "failedRequests": "失败请求",
-        "quota": "剩余额度",
-        "unlimited": "无限制",
         "expireAt": "过期时间",
         "neverExpire": "永不过期",
         "daysLeft": "天后到期",
@@ -48,7 +42,6 @@
         "site": "站点",
         "channel": "渠道",
         "group": "分组",
-        "key": "密钥",
         "model": "价格",
         "log": "日志",
         "setting": "设置"
@@ -66,10 +59,7 @@
             "createdDesc": "时间倒序",
             "balanceDesc": "余额高到低",
             "balanceAsc": "余额低到高",
-            "asc": "升序",
-            "desc": "降序",
             "logRefresh": {
-                "refresh": "刷新日志"
             },
             "logFilter": {
                 "title": "日志筛选",
@@ -293,7 +283,6 @@
             },
             "import": {
                 "title": "导入（增量）",
-                "selected": "已选择文件",
                 "button": "导入 JSON",
                 "importing": "导入中...",
                 "noFile": "请先选择 JSON 文件",
@@ -388,8 +377,6 @@
             "title": "版本信息",
             "currentVersion": "当前版本",
             "latestVersion": "最新版本",
-            "buildTime": "构建时间",
-            "publishedAt": "发布时间",
             "github": "GitHub 仓库",
             "unknown": "未知",
             "versionMismatch": "版本不匹配",
@@ -507,22 +494,16 @@
             "restoreSuccess": "恢复成功",
             "restoreFailed": "恢复失败",
             "restoreConfirm": "确认从此备份恢复？已有数据将被增量覆盖。",
-            "fileName": "文件名",
-            "fileSize": "大小",
-            "modifiedAt": "修改时间",
-            "refresh": "刷新",
-            "notConfigured": "WebDAV 未配置"
+            "refresh": "刷新"
         }
     },
     "group": {
         "toast": {
-            "created": "创建成功",
             "createFailed": "创建失败",
             "updated": "更新成功",
             "updateFailed": "更新失败",
             "deleted": "删除成功",
             "deleteFailed": "删除失败",
-            "autoAddFailed": "自动添加失败",
             "pinned": "已置顶",
             "unpinned": "已取消置顶",
             "pinFailed": "置顶操作失败"
@@ -539,7 +520,6 @@
             "cloneSuffix": "副本",
             "namePlaceholder": "为预设命名",
             "name": "预设名称",
-            "close": "关闭",
             "loading": "加载中...",
             "empty": "暂无预设",
             "activeBadge": "当前",
@@ -599,9 +579,7 @@
             "items": "已选模型",
             "addItem": "添加模型",
             "autoAdd": "自动添加",
-            "clear": "清空",
-            "selectChannel": "渠道",
-            "selectModel": "模型"
+            "clear": "清空"
         },
         "mode": {
             "roundRobin": "轮询",
@@ -738,10 +716,7 @@
             "noMore": "没有更多日志了"
         },
         "card": {
-            "error": "错误",
             "errorInfo": "错误信息",
-            "firstToken": "首字",
-            "totalTime": "总耗时",
             "duration": "耗时",
             "input": "输入",
             "output": "输出",
@@ -753,7 +728,6 @@
             "responseContent": "响应内容",
             "noRequestContent": "(无请求内容)",
             "noResponseContent": "(无响应内容)",
-            "firstTokenTime": "首字时间",
             "tokens": "tokens",
             "retryDetails": "重试详情",
             "attempts": "次尝试",
@@ -780,29 +754,7 @@
             "wsReconnectHint": "本次请求原本的上游 WebSocket 链路已断开，重新建立连接后恢复成功。",
             "wsReplayRecoveryHint": "本次请求先尝试续传失败，随后自动回放历史内容恢复了上下文，并建立了新的续传锚点。",
             "wsDowngradeHint": "本次请求原本尝试走上游 WebSocket，但因上游不可用已自动降级为 HTTP。",
-            "inputDetails": "输入明细",
-            "transportInput": "传输输入",
-            "billInput": "计费输入",
-            "cacheRead": "缓存读取",
-            "cacheWrite": "缓存写入",
             "reasoningEffort": "推理强度"
-        },
-        "filters": {
-            "keywordPlaceholder": "搜索模型、API Key 或内容",
-            "channel": "渠道",
-            "allChannels": "全部渠道",
-            "status": "状态",
-            "allStatus": "全部状态",
-            "success": "成功",
-            "error": "错误",
-            "reset": "重置",
-            "refresh": "刷新"
-        },
-        "pagination": {
-            "prev": "上一页",
-            "next": "下一页",
-            "page": "第 {page} 页",
-            "pagesRange": "第 {from} ~ {to} 页"
         }
     },
     "channel": {
@@ -865,20 +817,16 @@
             "type": "渠道类型",
             "baseUrls": "Base URLs",
             "baseUrlUrl": "地址",
-            "baseUrlDelay": "延迟(ms)",
             "advanced": "高级设置",
             "apiKey": "API Key",
             "customHeader": "自定义 Header",
             "customHeaderKey": "Header Key",
             "customHeaderValue": "Header Value",
             "customHeaderAdd": "添加 Header",
-            "channelProxy": "渠道代理",
-            "channelProxyPlaceholder": "可选：仅对该渠道生效（覆盖全局代理）",
             "paramOverride": "参数覆盖",
             "paramOverridePlaceholder": "可选：JSON 字符串，用于覆盖请求参数",
             "model": "模型",
             "enabled": "启用",
-            "proxy": "使用代理",
             "modelCustomPlaceholder": "自定义模型名称",
             "modelAdd": "添加",
             "modelRefresh": "刷新",
@@ -896,11 +844,6 @@
             "typeVolcengine": "火山引擎",
             "autoSync": "自动同步",
             "forceDeepSeekThinking": "启用 DeepSeek thinking 参数",
-            "autoGroup": "自动分组",
-            "autoGroupNone": "不自动分组",
-            "autoGroupFuzzy": "模糊匹配",
-            "autoGroupExact": "准确匹配",
-            "autoGroupRegex": "正则匹配",
             "wsMode": "Responses WS 模式",
             "wsModeInherit": "跟随全局",
             "wsModePassthrough": "直通",

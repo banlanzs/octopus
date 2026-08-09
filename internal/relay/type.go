@@ -2,7 +2,6 @@ package relay
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -70,19 +69,6 @@ type StreamWriter interface {
 	WriteHeader(code int)
 }
 
-// UpstreamReader abstracts reading events from upstream (SSE or WebSocket).
-type UpstreamReader interface {
-	// ReadEvent reads the next event data. Returns io.EOF at end of stream.
-	ReadEvent(ctx context.Context) ([]byte, error)
-	// StatusCode returns the HTTP status code (for error handling).
-	StatusCode() int
-	// Headers returns the response headers.
-	Headers() http.Header
-	// Body returns the raw response body for non-stream scenarios.
-	Body() io.ReadCloser
-	Close() error
-}
-
 type relayRequest struct {
 	c               *gin.Context
 	ctx             context.Context // used when c is nil (WebSocket mode)
@@ -94,6 +80,10 @@ type relayRequest struct {
 	groupID         int
 	groupSessionTTL int
 	iter            *balancer.Iterator
+
+	// responsesPassthroughRequired 表示请求需要 OpenAI Responses 原生能力
+	//（仅 OpenAI Response 渠道可直通），兜底探测需遵守该约束。
+	responsesPassthroughRequired bool
 
 	// rawBody 保存客户端原始请求 body，用于同格式（如 Anthropic→Anthropic）直通转发时
 	// 绕过内部模型来回转换，以保证 beta 字段、内容块顺序、thinking 签名等完全透传。
