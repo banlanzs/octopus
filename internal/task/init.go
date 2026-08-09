@@ -21,6 +21,7 @@ const (
 	TaskSiteCheckin       = "site_checkin"
 	TaskWSAffinityCleanup = "ws_affinity_cleanup"
 	TaskWebDAVBackup      = "webdav_backup"
+	TaskAutoRank          = "auto_rank"
 )
 
 func Init() {
@@ -92,6 +93,13 @@ func Init() {
 			log.Debugf("ws response affinity cleanup removed %d expired rows", deleted)
 		}
 	})
+
+	// 注册自动排序(Auto)任务（默认间隔 60 秒，总开关在任务内判断）
+	autoRankIntervalSec, err := op.SettingGetInt(model.SettingKeyAutoRankInterval)
+	if err != nil || autoRankIntervalSec <= 0 {
+		autoRankIntervalSec = 60
+	}
+	Register(string(model.SettingKeyAutoRankInterval), time.Duration(autoRankIntervalSec)*time.Second, false, AutoRankTask)
 
 	// 注册被动离群退役(POR)任务（默认间隔 2 分钟，总开关在任务内判断）
 	outlierIntervalMinutes, err := op.SettingGetInt(model.SettingKeyOutlierRetireInterval)

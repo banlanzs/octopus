@@ -607,7 +607,8 @@
             "roundRobin": "Round Robin",
             "random": "Random",
             "failover": "Failover",
-            "weighted": "Weighted"
+            "weighted": "Weighted",
+            "auto": "Auto"
         },
         "health": {
             "title": "Health",
@@ -894,6 +895,7 @@
             "typeGemini": "Gemini",
             "typeVolcengine": "Volcengine",
             "autoSync": "Auto Sync",
+            "forceDeepSeekThinking": "DeepSeek Thinking Param",
             "autoGroup": "Auto Group",
             "autoGroupNone": "None",
             "autoGroupFuzzy": "Fuzzy",

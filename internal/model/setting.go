@@ -39,6 +39,10 @@ const (
 	SettingKeyOutlierRecoverStreak             SettingKey = "outlier_recover_streak"               // POR 连续探活成功恢复阈值
 	SettingKeyOutlierReapMinutes               SettingKey = "outlier_reap_minutes"                 // POR 窗口内存回收 TTL(分钟)
 	SettingKeyOutlierCFRecoverMinutes          SettingKey = "outlier_cf_recover_minutes"           // POR CF 退役渠道恢复探活冷却(分钟)
+	SettingKeyAutoRankEnabled                  SettingKey = "auto_rank_enabled"                     // 自动排序(Auto)总开关
+	SettingKeyAutoRankInterval                 SettingKey = "auto_rank_interval"                    // 自动排序控制面任务轮询间隔(秒)
+	SettingKeyAutoRankExploreRatio             SettingKey = "auto_rank_explore_ratio"               // 自动排序探索比例(百分比 0-100)
+	SettingKeyAutoRankMinSamples               SettingKey = "auto_rank_min_samples"                 // 参与排序所需最小样本数
 	SettingKeyApiBaseUrl                       SettingKey = "api_base_url"                         // 对外服务基础地址，用于一键导出客户端配置，为空时不显示导出入口
 	SettingKeyWebDAVURL                        SettingKey = "webdav_url"                            // WebDAV 服务器地址
 	SettingKeyWebDAVUsername                   SettingKey = "webdav_username"                       // WebDAV 用户名
@@ -86,6 +90,10 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyOutlierRecoverStreak, Value: "2"},     // 连续探活成功 2 次恢复
 		{Key: SettingKeyOutlierReapMinutes, Value: "30"},      // 窗口 30 分钟无流量回收
 		{Key: SettingKeyOutlierCFRecoverMinutes, Value: "30"}, // CF 退役渠道 30 分钟后才探活恢复
+		{Key: SettingKeyAutoRankEnabled, Value: "true"},    // 默认启用自动排序（仅在分组切换为 Auto 模式时生效）
+		{Key: SettingKeyAutoRankInterval, Value: "60"},     // 默认每 60 秒执行一次学习/落库
+		{Key: SettingKeyAutoRankExploreRatio, Value: "10"}, // 默认 10% 请求用于探索欠采样候选
+		{Key: SettingKeyAutoRankMinSamples, Value: "3"},    // 样本 ≥3 条才按得分参与排序
 		{Key: SettingKeyApiBaseUrl, Value: ""},                  // 默认为空，不显示客户端导出入口
 		{Key: SettingKeyWebDAVURL, Value: ""},                   // 默认为空，未配置
 		{Key: SettingKeyWebDAVUsername, Value: ""},              // 默认为空
@@ -116,9 +124,13 @@ func (s *Setting) Validate() error {
 	case SettingKeyOutlierRetireInterval, SettingKeyOutlierWindowMinutes, SettingKeyOutlierMinSamples,
 		SettingKeyOutlierConsecFails, SettingKeyOutlierRecoverStreak,
 		SettingKeyOutlierReapMinutes, SettingKeyOutlierCFRecoverMinutes,
+		SettingKeyAutoRankInterval, SettingKeyAutoRankMinSamples,
 		SettingKeyWebDAVRetentionCount:
 		// 时间窗/样本/连击/间隔等：0 或负值无意义，下限为 1。
 		return validateIntMin(s.Value, 1)
+	case SettingKeyAutoRankExploreRatio:
+		// 探索比例取百分比，允许 0（纯贪婪）到 100（全探索）。
+		return validateIntRange(s.Value, 0, 100)
 	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval:
 		value, err := strconv.Atoi(s.Value)
 		if err != nil {
@@ -128,7 +140,7 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("setting value must be non-negative")
 		}
 		return nil
-	case SettingKeyRelayLogKeepEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyWebDAVIncludeStats:
+	case SettingKeyRelayLogKeepEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoRankEnabled, SettingKeyWebDAVIncludeStats:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("setting value must be true or false")
 		}

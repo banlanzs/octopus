@@ -139,4 +139,5 @@ type attemptResult struct {
 	Err               error         // 失败时的错误
 	StatusCode        int           // 上游 HTTP 状态码（0 = 连接错误）
 	RetryAfter        time.Duration // 解析的 Retry-After 值
+	DurationMS        int64         // 本次尝试耗时（毫秒），供自动排序学习
 }

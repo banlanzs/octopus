@@ -224,6 +224,9 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 
 		// 设置实际模型
 		internalRequest.Model = item.ModelName
+		// 渠道级 DeepSeek thinking 强制开关（中转站 DeepSeek 别名渠道：模型名
+		// 不含 "deepseek" 时仍按 DeepSeek thinking 语义透传）。
+		internalRequest.ForceDeepSeekThinking = channel.ForceDeepSeekThinking
 
 		log.Debugf("request model %s, mode: %d, forwarding to channel: %s model: %s (attempt %d/%d, sticky=%t)",
 			requestModel, group.Mode, channel.Name, item.ModelName,
@@ -292,6 +295,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			failureKind := circuitFailureKind(group.RetryEnabled, result.StatusCode)
 			balancer.RecordFailure(channel.ID, usedKey.ID, internalRequest.Model, failureKind)
 			outlierwindow.Report(channel.ID, false, result.StatusCode, time.Now())
+			balancer.RecordAutoSample(channel.ID, internalRequest.Model, false, result.DurationMS)
 			if failureKind == balancer.FailureHard {
 				maybeLearnManagedRoute(c.Request.Context(), channel.ID, internalRequest.Model, inboundType, result.Err)
 			}
@@ -299,6 +303,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 
 		if result.Success {
 			outlierwindow.Report(channel.ID, true, result.StatusCode, time.Now())
+			balancer.RecordAutoSample(channel.ID, internalRequest.Model, true, result.DurationMS)
 
 			// === HTTP Replay 状态保存 ===
 			// 成功后，如果是 OpenAI Responses HTTP 请求，保存 replay 状态供后续续接
@@ -427,7 +432,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 		// 会话保持：更新粘性记录
 		balancer.SetSticky(ra.apiKeyID, ra.requestModel, ra.channel.ID, ra.usedKey.ID)
 
-		return attemptResult{Success: true}
+		return attemptResult{Success: true, DurationMS: span.Duration().Milliseconds()}
 	}
 
 	// ====== 失败 ======
@@ -444,6 +449,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 			Canceled:   true,
 			Err:        fwdErr,
 			StatusCode: statusCode,
+			DurationMS: span.Duration().Milliseconds(),
 		}
 	}
 
@@ -472,6 +478,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 		Err:               fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr),
 		StatusCode:        statusCode,
 		RetryAfter:        ra.retryAfter,
+		DurationMS:        span.Duration().Milliseconds(),
 	}
 }
 

@@ -51,6 +51,7 @@ var startCmd = &cobra.Command{
 			shutdown.Shutdown()
 			os.Exit(1)
 		}
+		relay.InitAutoRank(cmd.Context())
 		relayLogWriterCtx, stopRelayLogWriter := context.WithCancel(context.Background())
 		shutdown.Register(func() error {
 			stopRelayLogWriter()

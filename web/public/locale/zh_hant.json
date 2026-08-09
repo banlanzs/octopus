@@ -607,7 +607,8 @@
             "roundRobin": "輪詢",
             "random": "隨機",
             "failover": "故障轉移",
-            "weighted": "加權分配"
+            "weighted": "加權分配",
+            "auto": "自動排序"
         },
         "health": {
             "title": "健康",
@@ -894,6 +895,7 @@
             "typeGemini": "Gemini",
             "typeVolcengine": "火山引擎",
             "autoSync": "自動同步",
+            "forceDeepSeekThinking": "啟用 DeepSeek thinking 參數",
             "autoGroup": "自動分組",
             "autoGroupNone": "不自動分組",
             "autoGroupFuzzy": "模糊比對",
