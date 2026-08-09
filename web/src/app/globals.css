@@ -162,6 +162,32 @@ html.dark,
     -ms-overflow-style: none;
   }
 
+  /* 显示滚动条的容器（覆盖全局 scrollbar-width: none）：
+     用于日志详情等需要明确滚动提示的区域 */
+  .scrollbar-visible {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    -ms-overflow-style: auto;
+  }
+
+  .scrollbar-visible::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-visible::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-visible::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 4px;
+  }
+
+  .scrollbar-visible::-webkit-scrollbar-thumb:hover {
+    background-color: var(--muted-foreground);
+  }
+
   body {
     @apply bg-background text-foreground;
     isolation: isolate;

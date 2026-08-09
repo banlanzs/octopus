@@ -70,6 +70,7 @@ export interface RelayLog {
     use_time: number;            // 总用时(毫秒)
     cost: number;                // 消耗费用
     request_content: string;     // 请求内容
+    request_headers?: string | null; // 请求头（JSON 序列化，脱敏）
     response_content: string;    // 响应内容
     error: string;               // 错误信息
     attempts?: ChannelAttempt[]; // 所有尝试记录

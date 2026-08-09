@@ -136,6 +136,8 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 
 	// 初始化 Metrics
 	metrics := NewRelayMetrics(apiKeyID, requestModel, rawBody, internalRequest)
+	// 捕获客户端原始请求头（脱敏、过滤 hop-by-hop），供日志详情页展示
+	metrics.RequestHeaders = serializeRequestHeadersForLog(c.Request.Header)
 	// 如果触发了 HTTP replay，记录 ws_mode=replay 和 ws_recovery=replay
 	if responsesReplayState != nil {
 		metrics.SetWSMode(dbmodel.RelayLogWSModeReplay)
@@ -693,6 +695,40 @@ func (ra *relayAttempt) clientRequestHeaders() http.Header {
 		return nil
 	}
 	return ra.c.Request.Header
+}
+
+// serializeRequestHeadersForLog 将客户端请求头序列化为 JSON 字符串，用于日志详情页展示。
+// 过滤 hop-by-hop 头，并对敏感头（Authorization / X-Api-Key / Cookie 等）脱敏，
+// 避免把上游密钥或用户凭据写入 relay_logs。
+func serializeRequestHeadersForLog(h http.Header) string {
+	if len(h) == 0 {
+		return ""
+	}
+	sensitive := map[string]bool{
+		"authorization":  true,
+		"x-api-key":      true,
+		"cookie":         true,
+		"set-cookie":     true,
+		"proxy-authorization": true,
+	}
+	sanitized := make(http.Header, len(h))
+	for key, values := range h {
+		lowerKey := strings.ToLower(key)
+		if hopByHopHeaders[lowerKey] {
+			continue
+		}
+		if sensitive[lowerKey] {
+			// 保留 header 名，值脱敏
+			sanitized[key] = []string{"[redacted]"}
+			continue
+		}
+		sanitized[key] = values
+	}
+	data, err := json.Marshal(sanitized)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *wsUpstreamReader) error {

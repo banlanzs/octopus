@@ -67,7 +67,8 @@ type RelayLog struct {
 	UseTime              int                 `json:"use_time"`                                 // 总用时(毫秒)
 	Cost                 float64             `json:"cost"`                                     // 消耗费用
 	RequestContent       string              `json:"request_content"`                          // 请求内容
-	ResponseContent      string              `json:"response_content"`                         // 响应内容
+	RequestHeaders       string              `json:"request_headers,omitempty"`                 // 请求头（JSON 序列化，脱敏）
+	ResponseContent      string              `json:"response_content"`                          // 响应内容
 	Error                string              `json:"error"`                                    // 错误信息
 	Success              bool                `json:"success" gorm:"not null;default:false"`    // 是否成功，便于状态筛选索引
 	// ReasoningEffort 记录本次请求使用的推理强度（reasoning_effort / output_config.effort 值），

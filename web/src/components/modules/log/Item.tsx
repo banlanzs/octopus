@@ -516,6 +516,107 @@ function DeferredJsonContent({ content, fallbackText, isLoading }: { content: st
     );
 }
 
+// RequestContentPanel 展示请求内容面板：支持「请求头 / 请求体」切换，并提供复制按钮。
+function RequestContentPanel({ log, isLoading }: { log: RelayLog; isLoading?: boolean }) {
+    const t = useTranslations('log.card');
+    const [tab, setTab] = useState<'headers' | 'body'>('headers');
+
+    // 请求头默认优先展示（若存在），否则直接显示请求体
+    const effectiveTab = tab === 'headers' && !log.request_headers ? 'body' : tab;
+    const activeContent = effectiveTab === 'headers' ? log.request_headers : log.request_content;
+
+    return (
+        <div className="flex flex-col rounded-2xl border border-border bg-muted/30 overflow-hidden min-h-0">
+            <div className="flex items-center gap-2 px-3 md:px-4 py-2.5 md:py-3 border-b border-border bg-muted/50 shrink-0">
+                <Send className="size-4 text-green-500" />
+                <span className="text-sm font-medium text-card-foreground">{t('requestContent')}</span>
+
+                {log.request_headers ? (
+                    <div className="ml-2 flex items-center rounded-lg bg-muted p-0.5 text-xs">
+                        <button
+                            type="button"
+                            onClick={() => setTab('headers')}
+                            className={cn(
+                                'rounded-md px-2 py-0.5 font-medium transition-colors',
+                                effectiveTab === 'headers' ? 'bg-background text-card-foreground shadow-sm' : 'text-muted-foreground hover:text-card-foreground',
+                            )}
+                        >
+                            {t('requestHeaders')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setTab('body')}
+                            className={cn(
+                                'rounded-md px-2 py-0.5 font-medium transition-colors',
+                                effectiveTab === 'body' ? 'bg-background text-card-foreground shadow-sm' : 'text-muted-foreground hover:text-card-foreground',
+                            )}
+                        >
+                            {t('requestBody')}
+                        </button>
+                    </div>
+                ) : null}
+
+                <Badge variant="secondary" className="ml-auto text-xs">
+                    {getHeadlineInputTokens(log).toLocaleString()} {t('tokens')}
+                </Badge>
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <span>
+                            <CopyIconButton
+                                text={activeContent ?? ''}
+                                className="p-1.5 rounded-lg text-muted-foreground hover:text-card-foreground hover:bg-muted/60 transition-colors"
+                                copyIconClassName="size-4"
+                                checkIconClassName="size-4"
+                            />
+                        </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{t('copyRaw')}</TooltipContent>
+                </Tooltip>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0 scrollbar-visible">
+                <DeferredJsonContent
+                    content={activeContent ?? undefined}
+                    fallbackText={t('noRequestContent')}
+                    isLoading={isLoading}
+                />
+            </div>
+        </div>
+    );
+}
+
+// ResponseContentPanel 展示响应内容面板，提供复制按钮。
+function ResponseContentPanel({ log, isLoading }: { log: RelayLog; isLoading?: boolean }) {
+    const t = useTranslations('log.card');
+
+    return (
+        <div className="flex flex-col rounded-2xl border border-border bg-muted/30 overflow-hidden min-h-0">
+            <div className="flex items-center gap-2 px-3 md:px-4 py-2.5 md:py-3 border-b border-border bg-muted/50 shrink-0">
+                <MessageSquare className="size-4 text-purple-500" />
+                <span className="text-sm font-medium text-card-foreground">{t('responseContent')}</span>
+                <Badge variant="secondary" className="ml-auto text-xs">
+                    {log.output_tokens.toLocaleString()} {t('tokens')}
+                </Badge>
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <span>
+                            <CopyIconButton
+                                text={log.response_content ?? ''}
+                                className="p-1.5 rounded-lg text-muted-foreground hover:text-card-foreground hover:bg-muted/60 transition-colors"
+                                copyIconClassName="size-4"
+                                checkIconClassName="size-4"
+                            />
+                        </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{t('copyRaw')}</TooltipContent>
+                </Tooltip>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0 scrollbar-visible">
+                <DeferredJsonContent content={log.response_content} fallbackText={t('noResponseContent')} isLoading={isLoading} />
+            </div>
+        </div>
+    );
+}
+
 function AttemptDisableButton({
     target,
     pending,
@@ -981,30 +1082,8 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
 
                                 <div className="flex-1 min-h-0 overflow-hidden">
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full min-h-0">
-                                        <div className="flex flex-col rounded-2xl border border-border bg-muted/30 overflow-hidden min-h-0">
-                                            <div className="flex items-center gap-2 px-3 md:px-4 py-2.5 md:py-3 border-b border-border bg-muted/50 shrink-0">
-                                                <Send className="size-4 text-green-500" />
-                                                <span className="text-sm font-medium text-card-foreground">{t('requestContent')}</span>
-                                                <Badge variant="secondary" className="ml-auto text-xs">
-                                                    {getHeadlineInputTokens(displayLog).toLocaleString()} {t('tokens')}
-                                                </Badge>
-                                            </div>
-                                            <div className="flex-1 overflow-auto min-h-0">
-                                                <DeferredJsonContent content={displayLog.request_content} fallbackText={t('noRequestContent')} isLoading={detailLoading} />
-                                            </div>
-                                        </div>
-                                        <div className="flex flex-col rounded-2xl border border-border bg-muted/30 overflow-hidden min-h-0">
-                                            <div className="flex items-center gap-2 px-3 md:px-4 py-2.5 md:py-3 border-b border-border bg-muted/50 shrink-0">
-                                                <MessageSquare className="size-4 text-purple-500" />
-                                                <span className="text-sm font-medium text-card-foreground">{t('responseContent')}</span>
-                                                <Badge variant="secondary" className="ml-auto text-xs">
-                                                    {displayLog.output_tokens.toLocaleString()} {t('tokens')}
-                                                </Badge>
-                                            </div>
-                                            <div className="flex-1 overflow-auto min-h-0">
-                                                <DeferredJsonContent content={displayLog.response_content} fallbackText={t('noResponseContent')} isLoading={detailLoading} />
-                                            </div>
-                                        </div>
+                                        <RequestContentPanel log={displayLog} isLoading={detailLoading} />
+                                        <ResponseContentPanel log={displayLog} isLoading={detailLoading} />
                                     </div>
                                 </div>
                             </div>
