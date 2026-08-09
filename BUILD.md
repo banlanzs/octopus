@@ -10,7 +10,7 @@
 
 ---
 
-## 构建 octopus.exe
+## 构建 octopus-windows-amd64.exe
 
 ### 快速构建（推荐）
 
@@ -20,7 +20,10 @@
 make build
 ```
 
-产物输出到 `build/bin/octopus`（Windows 平台为 `build/bin/octopus.exe`）。
+产物输出到 `build/bin/octopus`（Windows 平台为 `build/bin/octopus-windows-amd64.exe`）。
+
+> **Windows 注意**：Makefile 会在 Windows 上调用 `scripts/make-build.ps1`，在
+> macOS/Linux 上调用 `scripts/make-build.sh`，无需额外安装 Git Bash 或配置 `sh.exe`。
 
 ### 分步构建
 
@@ -52,7 +55,7 @@ CGO_ENABLED=0 go build -tags=jsoniter \
             -X 'github.com/bestruirui/octopus/internal/conf.Author=hureru' \
             -X 'github.com/bestruirui/octopus/internal/conf.Commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)' \
             -s -w" \
-  -o octopus.exe .
+  -o octopus-windows-amd64.exe .
 ```
 
 > 前端 SSG 产物通过 `static/static.go` 的 `//go:embed all:out` 嵌入到二进制中，因此 `static/out` 目录必须存在。
@@ -60,7 +63,7 @@ CGO_ENABLED=0 go build -tags=jsoniter \
 ### 仅后端（无前端）
 
 ```bash
-go build -tags=jsoniter -o octopus.exe .
+go build -tags=jsoniter -o octopus-windows-amd64.exe .
 ```
 
 > 需要首先用 `go run main.go start` 生成默认配置文件，或用已有的配置文件运行。
@@ -109,4 +112,4 @@ NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8080" pnpm dev
 
 ### `go build` 后启动报错 "data/config.json not found"
 
-首次运行 `./octopus.exe` 会自动生成默认配置文件。如果需要自定义配置，先停止服务，编辑 `data/config.json` 后再启动。
+首次运行 `./octopus-windows-amd64.exe` 会自动生成默认配置文件。如果需要自定义配置，先停止服务，编辑 `data/config.json` 后再启动。
