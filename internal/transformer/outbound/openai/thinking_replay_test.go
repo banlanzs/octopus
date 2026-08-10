@@ -379,3 +379,58 @@ func TestDeepSeekOpenAIRoundTripReplayKeepsReasoningContent(t *testing.T) {
 	}
 }
 
+// TestDeepSeekReplaySurvivesPriorNonDeepSeekAttempt verifies that outbound
+// transformation does not destroy thinking history when the relay fails over
+// from a non-DeepSeek channel to a DeepSeek channel using the same request.
+func TestDeepSeekReplaySurvivesPriorNonDeepSeekAttempt(t *testing.T) {
+	anthropicBody := `{
+		"model": "gpt-4o",
+		"max_tokens": 1024,
+		"thinking": {"type": "enabled", "budget_tokens": 2048},
+		"messages": [
+			{"role": "user", "content": "hello"},
+			{"role": "assistant", "content": [
+				{"type": "thinking", "thinking": "let me think", "signature": "sig-abc"},
+				{"type": "text", "text": "hi"}
+			]}
+		]
+	}`
+
+	inbound := &inboundAnthropic.MessagesInbound{}
+	internalReq, err := inbound.TransformRequest(context.Background(), []byte(anthropicBody))
+	if err != nil {
+		t.Fatalf("anthropic inbound failed: %v", err)
+	}
+
+	outbound := &ChatOutbound{}
+	if _, err := outbound.TransformRequest(context.Background(), internalReq, "https://api.openai.com/v1", "test-key"); err != nil {
+		t.Fatalf("non-DeepSeek outbound failed: %v", err)
+	}
+
+	internalReq.Model = "deepseek-chat"
+	httpReq, err := outbound.TransformRequest(context.Background(), internalReq, "https://api.deepseek.com/v1", "test-key")
+	if err != nil {
+		t.Fatalf("DeepSeek outbound failed: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(readRequestBody(t, httpReq.Body), &payload); err != nil {
+		t.Fatalf("failed to parse outgoing request: %v", err)
+	}
+	msgs := payload["messages"].([]any)
+	assistant := msgs[len(msgs)-1].(map[string]any)
+	content, ok := assistant["content"].([]any)
+	if !ok {
+		t.Fatalf("expected DeepSeek content array, got: %v", assistant)
+	}
+	for _, item := range content {
+		block, ok := item.(map[string]any)
+		if ok && block["type"] == "thinking" {
+			if block["thinking"] != "let me think" || block["signature"] != "sig-abc" {
+				t.Fatalf("thinking block changed after failover: %v", block)
+			}
+			return
+		}
+	}
+	t.Fatalf("thinking block lost after prior non-DeepSeek attempt: %v", assistant)
+}

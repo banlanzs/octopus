@@ -80,6 +80,13 @@ type ChatCompletionsAudio struct {
 }
 
 func (o *ChatOutbound) TransformRequest(ctx context.Context, request *model.InternalLLMRequest, baseUrl, key string) (*http.Request, error) {
+	// Relay may reuse the same internal request across channel failover and
+	// same-channel retries. The thinking materialization/stripping steps below
+	// intentionally normalize messages for one wire target, so keep those
+	// mutations on an isolated copy or a prior non-DeepSeek attempt can erase
+	// the signature needed by a later DeepSeek attempt.
+	request = cloneChatTransformRequest(request)
+
 	// DeepSeek thinking mode 要求多轮对话把 assistant 的 thinking 内容连同
 	// signature 以 content[].thinking 块形式原样回传，否则上游 400
 	// ("The content[].thinking in the thinking mode must be passed back to the API")。
@@ -135,6 +142,50 @@ func (o *ChatOutbound) TransformRequest(ctx context.Context, request *model.Inte
 	req.URL = parsedUrl
 	req.Method = http.MethodPost
 	return req, nil
+}
+
+func cloneChatTransformRequest(request *model.InternalLLMRequest) *model.InternalLLMRequest {
+	if request == nil {
+		return nil
+	}
+
+	cloned := *request
+	if len(request.Messages) > 0 {
+		cloned.Messages = make([]model.Message, len(request.Messages))
+		for i, message := range request.Messages {
+			cloned.Messages[i] = message
+			cloned.Messages[i].Content.Content = cloneChatStringPointer(message.Content.Content)
+			if len(message.Content.MultipleContent) > 0 {
+				parts := make([]model.MessageContentPart, len(message.Content.MultipleContent))
+				copy(parts, message.Content.MultipleContent)
+				for j, part := range parts {
+					parts[j].Text = cloneChatStringPointer(part.Text)
+					parts[j].Thinking = cloneChatStringPointer(part.Thinking)
+					parts[j].Signature = cloneChatStringPointer(part.Signature)
+					parts[j].RedactedThinking = cloneChatStringPointer(part.RedactedThinking)
+				}
+				cloned.Messages[i].Content.MultipleContent = parts
+			}
+			cloned.Messages[i].ReasoningContent = cloneChatStringPointer(message.ReasoningContent)
+			cloned.Messages[i].Reasoning = cloneChatStringPointer(message.Reasoning)
+			cloned.Messages[i].ReasoningSignature = cloneChatStringPointer(message.ReasoningSignature)
+			cloned.Messages[i].RedactedThinkingBlocks = append([]string(nil), message.RedactedThinkingBlocks...)
+			cloned.Messages[i].ReasoningBlocks = append([]model.ReasoningBlock(nil), message.ReasoningBlocks...)
+		}
+	}
+	if request.StreamOptions != nil {
+		streamOptions := *request.StreamOptions
+		cloned.StreamOptions = &streamOptions
+	}
+	return &cloned
+}
+
+func cloneChatStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 // applyOpenAIOrgProjectHeaders forwards the optional OpenAI-Organization and
