@@ -238,9 +238,33 @@ func buildChatCompletionsRequest(request *model.InternalLLMRequest) *ChatComplet
 	if !isDeepSeekTarget(request) {
 		result.Thinking = nil
 		result.ReasoningEffort = normalizeReasoningEffort(result.ReasoningEffort)
+	} else {
+		// DeepSeek v4 对 reasoning_effort 做严格白名单校验（仅接受
+		// low/medium/high/xhigh/max）。Anthropic/OpenAI 生态的 effort 值
+		// （如 "minimal"）或未知值原样透传会被上游 400 拒绝
+		// ("'reasoning_effort' must be one of: 'low', 'medium', 'high',
+		// 'xhigh', 'max'")，因此 DeepSeek target 也必须归一化。
+		result.ReasoningEffort = normalizeDeepSeekReasoningEffort(result.ReasoningEffort)
 	}
 
 	return result
+}
+
+// normalizeDeepSeekReasoningEffort 把 effort 值归一化为 DeepSeek v4 系列
+// 接受的枚举 {low, medium, high, xhigh, max}，其余值返回 ""（配合
+// omitempty 省略字段，DeepSeek 回落默认 effort）。DeepSeek 对该字段做
+// 严格校验，白名单外的值（如 Anthropic/OpenAI 生态的 "minimal"、未知值）
+// 会让上游返回 400；"minimal" 映射为 "low" 以保留最低档思考。
+func normalizeDeepSeekReasoningEffort(effort string) string {
+	normalized := strings.ToLower(strings.TrimSpace(effort))
+	switch normalized {
+	case "low", "medium", "high", "xhigh", "max":
+		return normalized
+	case "minimal":
+		return "low"
+	default:
+		return ""
+	}
 }
 
 // normalizeReasoningEffort 把 Anthropic 的 effort 值（low/medium/high/xhigh/max）
@@ -375,10 +399,13 @@ func materializeDeepSeekThinkingBlocks(request *model.InternalLLMRequest) {
 	if request == nil || !isDeepSeekTarget(request) {
 		return
 	}
-	// 显式禁用 thinking 时无需（也不应）回传 thinking 块。
-	if request.Thinking != nil && request.Thinking.Type == "disabled" {
-		return
-	}
+	// 历史中已产生的 thinking 块必须始终回传：DeepSeek thinking-mode 契约
+	// 要求携带 tools 的请求把之前的 thinking 完整回传（否则 400
+	// "The content[].thinking in the thinking mode must be passed back to
+	// the API"），而无 tools 时回传会被忽略（无副作用）。当前请求的
+	// thinking 开关只影响本轮是否生成新思考，不影响历史块的回传 ——
+	// 否则同一会话中 classify / 子代理等 thinking=disabled 的请求会因
+	// 不回传历史 thinking 被上游拒绝。
 	for i := range request.Messages {
 		msg := &request.Messages[i]
 		if msg.Role != "assistant" {

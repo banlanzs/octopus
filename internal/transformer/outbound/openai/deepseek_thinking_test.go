@@ -297,3 +297,192 @@ func TestDeepSeekStreamingReasoningContentBecomesAnthropicThinking(t *testing.T)
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestDeepSeekMinimalEffortNormalized verifies that an Anthropic adaptive
+// thinking request carrying the "minimal" effort level (which Claude Code
+// sends for subagent / classify calls) is normalized to "low" when forwarded
+// to a DeepSeek v4 channel. DeepSeek only accepts low/medium/high/xhigh/max
+// and rejects "minimal" with 400
+// ("'reasoning_effort' must be one of: 'low', 'medium', 'high', 'xhigh', 'max'").
+func TestDeepSeekMinimalEffortNormalized(t *testing.T) {
+	anthropicBody := `{
+		"model": "deepseek-v4-flash-0731",
+		"max_tokens": 1024,
+		"thinking": {"type": "adaptive"},
+		"output_config": {"effort": "minimal"},
+		"messages": [{"role": "user", "content": "classify this"}]
+	}`
+
+	inbound := &inboundAnthropic.MessagesInbound{}
+	internalReq, err := inbound.TransformRequest(context.Background(), []byte(anthropicBody))
+	if err != nil {
+		t.Fatalf("anthropic inbound failed: %v", err)
+	}
+
+	outbound := &ChatOutbound{}
+	httpReq, err := outbound.TransformRequest(context.Background(), internalReq, "https://api.deepseek.com/v1", "test-key")
+	if err != nil {
+		t.Fatalf("openai outbound failed: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(readRequestBody(t, httpReq.Body), &payload); err != nil {
+		t.Fatalf("failed to parse outgoing request: %v", err)
+	}
+	if effort, ok := payload["reasoning_effort"].(string); !ok || effort != "low" {
+		t.Fatalf("expected reasoning_effort normalized to 'low', got: %v", payload["reasoning_effort"])
+	}
+}
+
+// TestDeepSeekUnknownEffortDropped verifies that an effort value outside the
+// DeepSeek v4 whitelist is dropped entirely (field omitted) instead of being
+// forwarded and rejected upstream.
+func TestDeepSeekUnknownEffortDropped(t *testing.T) {
+	anthropicBody := `{
+		"model": "deepseek-v4-flash-0731",
+		"max_tokens": 1024,
+		"thinking": {"type": "adaptive"},
+		"output_config": {"effort": "bogus"},
+		"messages": [{"role": "user", "content": "hello"}]
+	}`
+
+	inbound := &inboundAnthropic.MessagesInbound{}
+	internalReq, err := inbound.TransformRequest(context.Background(), []byte(anthropicBody))
+	if err != nil {
+		t.Fatalf("anthropic inbound failed: %v", err)
+	}
+
+	outbound := &ChatOutbound{}
+	httpReq, err := outbound.TransformRequest(context.Background(), internalReq, "https://api.deepseek.com/v1", "test-key")
+	if err != nil {
+		t.Fatalf("openai outbound failed: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(readRequestBody(t, httpReq.Body), &payload); err != nil {
+		t.Fatalf("failed to parse outgoing request: %v", err)
+	}
+	if _, ok := payload["reasoning_effort"]; ok {
+		t.Fatalf("unknown reasoning_effort must be dropped, got: %v", payload["reasoning_effort"])
+	}
+}
+
+// TestDeepSeekDisabledThinkingStillReplaysHistory verifies that a request with
+// thinking.type=disabled (e.g. a Claude Code classify / subagent call sharing
+// the conversation history) still passes back the assistant thinking blocks
+// from earlier turns. DeepSeek requires full replay of thinking when the
+// conversation carried tools ("content[].thinking must be passed back"), and
+// silently ignores replayed thinking otherwise — so replay is always safe.
+func TestDeepSeekDisabledThinkingStillReplaysHistory(t *testing.T) {
+	anthropicBody := `{
+		"model": "deepseek-v4-flash",
+		"max_tokens": 1024,
+		"thinking": {"type": "disabled"},
+		"messages": [
+			{"role": "user", "content": "hello"},
+			{"role": "assistant", "content": [
+				{"type": "thinking", "thinking": "let me think", "signature": "sig-123"},
+				{"type": "text", "text": "hello to you"}
+			]}
+		]
+	}`
+
+	inbound := &inboundAnthropic.MessagesInbound{}
+	internalReq, err := inbound.TransformRequest(context.Background(), []byte(anthropicBody))
+	if err != nil {
+		t.Fatalf("anthropic inbound failed: %v", err)
+	}
+
+	outbound := &ChatOutbound{}
+	httpReq, err := outbound.TransformRequest(context.Background(), internalReq, "https://api.deepseek.com/v1", "test-key")
+	if err != nil {
+		t.Fatalf("openai outbound failed: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(readRequestBody(t, httpReq.Body), &payload); err != nil {
+		t.Fatalf("failed to parse outgoing request: %v", err)
+	}
+
+	msgs, ok := payload["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages field missing")
+	}
+	assistant := msgs[len(msgs)-1].(map[string]any)
+	content, ok := assistant["content"].([]any)
+	if !ok {
+		t.Fatalf("expected content array with thinking block, got: %v", assistant)
+	}
+	sawThinking := false
+	for _, c := range content {
+		block, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if block["type"] == "thinking" {
+			sawThinking = true
+			if block["thinking"] != "let me think" {
+				t.Fatalf("thinking block text mismatch: %v", block)
+			}
+			if block["signature"] != "sig-123" {
+				t.Fatalf("thinking block signature lost: %v", block)
+			}
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("content[].thinking not passed back to DeepSeek despite disabled thinking - assistant message: %v", assistant)
+	}
+}
+
+// TestDeepSeekArrayContentStreamSurvivesToAnthropic verifies that DeepSeek V4
+// streaming chunks carrying content as a block array
+// (delta.content = [{"type":"thinking","thinking":"...","signature":"..."},
+//                   {"type":"text","text":"..."}]) survive the OpenAI→Anthropic
+// stream conversion end-to-end. Regression: the array form was dropped
+// entirely by StreamEventsFromInternalResponse, so Claude Code received a
+// stream with no content blocks and failed with "API Error: Content block
+// not found".
+func TestDeepSeekArrayContentStreamSurvivesToAnthropic(t *testing.T) {
+	chunks := []string{
+		`{"id":"8b87f339","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":"thinking hard","signature":"sig-1"}]},"finish_reason":null}]}`,
+		`{"id":"8b87f339","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"<block>no"}]},"finish_reason":null}]}`,
+		`{"id":"8b87f339","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop_sequence","stop_sequence":"</block>"}]}`,
+		`{"id":"8b87f339","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[],"usage":{"prompt_tokens":6062,"completion_tokens":7,"total_tokens":81717,"cache_read_input_tokens":75648}}`,
+		`[DONE]`,
+	}
+
+	outbound := &ChatOutbound{}
+	inbound := &inboundAnthropic.MessagesInbound{}
+	var allSSE strings.Builder
+	for _, chunk := range chunks {
+		events, err := outbound.TransformStreamEvent(context.Background(), []byte(chunk))
+		if err != nil {
+			t.Fatalf("outbound failed for chunk %s: %v", chunk, err)
+		}
+		sse, err := inbound.TransformStreamEvents(context.Background(), events)
+		if err != nil {
+			t.Fatalf("inbound failed for chunk %s: %v", chunk, err)
+		}
+		allSSE.Write(sse)
+	}
+	text := allSSE.String()
+	for _, want := range []string{
+		`"type":"thinking_delta"`,
+		`"thinking":"thinking hard"`,
+		`"type":"signature_delta"`,
+		`"signature":"sig-1"`,
+		`"type":"text_delta"`,
+		`"text":"\u003cblock\u003eno"`,
+		`"stop_reason":"stop_sequence"`,
+		`"stop_sequence":"\u003c/block\u003e"`,
+		"event:message_stop",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in converted SSE, got:\n%s", want, text)
+		}
+	}
+	// 文本块必须出现在流中（回归点：数组 content 曾整体丢失）
+	if !strings.Contains(text, `\u003cblock\u003eno`) {
+		t.Fatalf("array text block lost in stream conversion, got:\n%s", text)
+	}
+}

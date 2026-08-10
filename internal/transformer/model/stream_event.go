@@ -99,7 +99,41 @@ func StreamEventsFromInternalResponse(response *InternalLLMResponse) []StreamEve
 					}
 				}
 			}
-			if len(delta.ReasoningBlocks) == 0 {
+			if len(delta.Content.MultipleContent) > 0 {
+				// DeepSeek V4 系列（及部分中转站）以 content 块数组返回流式内容：
+				//   delta.content = [{"type":"thinking","thinking":"...","signature":"..."},
+				//                    {"type":"text","text":"..."}]
+				// 而 OpenAI 标准 Chat 流式用 delta.content 字符串 +
+				// delta.reasoning_content。必须逐块投影，否则数组格式的文本 /
+				// 思考会被整体丢弃，客户端收到无内容块的流并报
+				// "Content block not found"（thinking 丢失还会导致后续
+				// 请求无法回传而 400）。同一 chunk 内多块按原顺序发射，
+				// 下游（Anthropic inbound）负责块切换。
+				for _, part := range delta.Content.MultipleContent {
+					switch part.Type {
+					case "text":
+						if part.Text != nil && *part.Text != "" {
+							events = append(events, StreamEvent{Kind: StreamEventKindTextDelta, ID: response.ID, Model: response.Model, Index: choice.Index, Delta: &StreamDelta{Text: *part.Text}})
+						}
+					case "thinking":
+						switch {
+						case part.Thinking != nil && *part.Thinking != "":
+							sig := ""
+							if part.Signature != nil {
+								sig = *part.Signature
+							}
+							events = append(events, StreamEvent{Kind: StreamEventKindThinkingDelta, ID: response.ID, Model: response.Model, Index: choice.Index, Delta: &StreamDelta{Thinking: *part.Thinking, Signature: sig}})
+						case part.Signature != nil && *part.Signature != "":
+							events = append(events, StreamEvent{Kind: StreamEventKindSignatureDelta, ID: response.ID, Model: response.Model, Index: choice.Index, Delta: &StreamDelta{Signature: *part.Signature}})
+						}
+					case "redacted_thinking":
+						if part.RedactedThinking != nil && *part.RedactedThinking != "" {
+							events = append(events, StreamEvent{Kind: StreamEventKindContentBlockStart, ID: response.ID, Model: response.Model, Index: choice.Index, ContentBlock: &StreamContentBlock{Type: string(ReasoningBlockKindRedacted), Data: *part.RedactedThinking}})
+							events = append(events, StreamEvent{Kind: StreamEventKindContentBlockStop, ID: response.ID, Model: response.Model, Index: choice.Index, ContentBlock: &StreamContentBlock{Type: string(ReasoningBlockKindRedacted)}})
+						}
+					}
+				}
+			} else if len(delta.ReasoningBlocks) == 0 {
 				if reasoning := delta.GetReasoningContent(); reasoning != "" {
 					events = append(events, StreamEvent{Kind: StreamEventKindThinkingDelta, ID: response.ID, Model: response.Model, Index: choice.Index, Delta: &StreamDelta{Thinking: reasoning}})
 				}

@@ -105,3 +105,72 @@ func TestStreamAggregatorKeepsNonContiguousChoiceIndices(t *testing.T) {
 		t.Fatalf("expected choice at index 1 to survive aggregation, got %+v", resp.Choices)
 	}
 }
+
+// DeepSeek V4（及部分中转站）的流式 chunk 以 content 块数组返回内容：
+//   delta.content = [{"type":"thinking","thinking":"...","signature":"..."},
+//                    {"type":"text","text":"..."}]
+// 而 OpenAI 标准 Chat 流式用 delta.content 字符串 + delta.reasoning_content。
+// StreamEventsFromInternalResponse 必须逐块投影数组格式，否则文本/思考被
+// 整体丢弃，客户端收到无内容块的流并报 "Content block not found"
+// （thinking 丢失还会导致后续请求无法回传而 400）。
+func TestStreamEventsFromInternalResponseProjectsArrayContentBlocks(t *testing.T) {
+	thinking := "thinking hard"
+	sig := "sig-1"
+	text := "<block>no"
+	redacted := "redacted-data"
+	resp := &InternalLLMResponse{
+		ID:     "chatcmpl-1",
+		Object: "chat.completion.chunk",
+		Model:  "deepseek-v4-flash",
+		Choices: []Choice{{
+			Index: 0,
+			Delta: &Message{
+				Role: "assistant",
+				Content: MessageContent{MultipleContent: []MessageContentPart{
+					{Type: "thinking", Thinking: &thinking, Signature: &sig},
+					{Type: "text", Text: &text},
+					{Type: "redacted_thinking", RedactedThinking: &redacted},
+				}},
+			},
+		}},
+	}
+
+	events := StreamEventsFromInternalResponse(resp)
+	sawThinking, sawSignature, sawText, sawRedactedStart, sawRedactedStop := false, false, false, false, false
+	for _, e := range events {
+		switch e.Kind {
+		case StreamEventKindThinkingDelta:
+			if e.Delta != nil && e.Delta.Thinking == "thinking hard" && e.Delta.Signature == "sig-1" {
+				sawThinking = true
+			}
+		case StreamEventKindSignatureDelta:
+			if e.Delta != nil && e.Delta.Signature == "sig-1" {
+				sawSignature = true
+			}
+		case StreamEventKindTextDelta:
+			if e.Delta != nil && e.Delta.Text == "<block>no" {
+				sawText = true
+			}
+		case StreamEventKindContentBlockStart:
+			if e.ContentBlock != nil && e.ContentBlock.Type == "redacted_thinking" && e.ContentBlock.Data == "redacted-data" {
+				sawRedactedStart = true
+			}
+		case StreamEventKindContentBlockStop:
+			sawRedactedStop = true
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("array thinking block not projected as thinking_delta: %+v", events)
+	}
+	if !sawText {
+		t.Fatalf("array text block not projected as text_delta: %+v", events)
+	}
+	if !sawRedactedStart || !sawRedactedStop {
+		t.Fatalf("array redacted_thinking block not projected as content block: %+v", events)
+	}
+	// thinking_delta 已带 signature，不应重复发 signature_delta（避免下游重复块）
+	if sawSignature {
+		t.Fatalf("signature emitted twice (thinking_delta already carries it): %+v", events)
+	}
+}
+

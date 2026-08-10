@@ -645,8 +645,12 @@ func (i *MessagesInbound) TransformResponse(ctx context.Context, response *model
 					case "thinking":
 						// DeepSeek thinking-mode 响应以 content[].thinking 块返回，
 						// 需转成 Anthropic thinking 块，Claude Code 才能存储并在
-						// 下一轮回传给上游（否则上游 400）。
-						if part.Thinking != nil && *part.Thinking != "" {
+						// 下一轮回传给上游（否则上游 400）。即使 thinking 文本为空
+						// （signature-only 块，DeepSeek 用 signature 维持多轮契约）
+						// 也必须保留块与 signature，否则下一轮无法完整回传。
+						hasThinking := part.Thinking != nil && *part.Thinking != ""
+						hasSignature := part.Signature != nil && *part.Signature != ""
+						if hasThinking || hasSignature {
 							contentBlocks = append(contentBlocks, MessageContentBlock{
 								Type:      "thinking",
 								Thinking:  part.Thinking,

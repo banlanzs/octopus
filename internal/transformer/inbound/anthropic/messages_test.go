@@ -549,3 +549,57 @@ func TestTransformRequestPreservesServerToolOnInternalRequest(t *testing.T) {
 		t.Fatalf("function tool name mismatch, got %q", fn.Function.Name)
 	}
 }
+
+// TestSignatureOnlyThinkingBlockPreserved verifies that a DeepSeek
+// content[].thinking block with empty text but a non-empty signature
+// (signature-only block) is preserved as an Anthropic thinking block on the
+// response side. Dropping it would lose the signature and break the next-turn
+// replay contract ("The content[].thinking in the thinking mode must be passed
+// back to the API").
+func TestSignatureOnlyThinkingBlockPreserved(t *testing.T) {
+	inbound := &MessagesInbound{}
+	emptyThinking := ""
+	sig := "sig-only"
+	internalResp := &model.InternalLLMResponse{
+		ID:     "chatcmpl-1",
+		Object: "chat.completion",
+		Model:  "deepseek-chat",
+		Choices: []model.Choice{{
+			Index: 0,
+			Message: &model.Message{
+				Role: "assistant",
+				Content: model.MessageContent{MultipleContent: []model.MessageContentPart{
+					{Type: "thinking", Thinking: &emptyThinking, Signature: &sig},
+					{Type: "text", Text: stringPtr("hi")},
+				}},
+			},
+		}},
+	}
+
+	out, err := inbound.TransformResponse(context.Background(), internalResp)
+	if err != nil {
+		t.Fatalf("anthropic response transform failed: %v", err)
+	}
+
+	var anthropicResp map[string]any
+	if err := json.Unmarshal(out, &anthropicResp); err != nil {
+		t.Fatalf("failed to parse anthropic response: %v", err)
+	}
+	content, ok := anthropicResp["content"].([]any)
+	if !ok {
+		t.Fatalf("anthropic response missing content: %v", anthropicResp)
+	}
+	sawThinking := false
+	for _, blk := range content {
+		block := blk.(map[string]any)
+		if block["type"] == "thinking" {
+			sawThinking = true
+			if got, _ := block["signature"].(string); got != "sig-only" {
+				t.Fatalf("signature-only thinking block lost its signature, got: %v", block)
+			}
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("signature-only thinking block was dropped: %v", content)
+	}
+}
