@@ -77,7 +77,9 @@ export function GroupCard({ group }: { group: Group }) {
     const updateGroup = useUpdateGroup();
     const deleteGroup = useDeleteGroup();
     const togglePin = useToggleGroupPin();
-    const { data: modelChannels = [] } = useModelChannelList();
+    // 分组卡片是健康度/熔断状态的主要观察入口：8s 短轮询，降级/冷却
+    // 变化能较快反映到徽标上（其他页面保持默认 30s）。
+    const { data: modelChannels = [] } = useModelChannelList(8000);
 
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [isDragging, setIsDragging] = useState(false);

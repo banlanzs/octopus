@@ -563,3 +563,67 @@ func TestDeepSeekThinkingReplayKeepsTopLevelReasoningContent(t *testing.T) {
 		t.Fatalf("unexpected top-level reasoning_signature: %v", assistant["reasoning_signature"])
 	}
 }
+
+// TestDeepSeekSignatureOnlyThinkingReplay verifies that a signature-only
+// thinking block (empty text + non-empty signature, common from DeepSeek /
+// relays) replayed by the client survives the Anthropic→OpenAI conversion.
+// Regression: the block was misclassified as a Gemini thought-signature shim
+// (ReasoningBlockKindSignature) on the Anthropic inbound and dropped by
+// deepSeekThinkingParts, so DeepSeek rejected the follow-up with
+// "The content[].thinking in the thinking mode must be passed back to the API".
+func TestDeepSeekSignatureOnlyThinkingReplay(t *testing.T) {
+	anthropicBody := `{
+		"model": "deepseek-v4-flash",
+		"max_tokens": 1024,
+		"thinking": {"type": "enabled", "budget_tokens": 2048},
+		"messages": [
+			{"role": "user", "content": "hello"},
+			{"role": "assistant", "content": [
+				{"type": "thinking", "thinking": "", "signature": "sig-deepseek-abc"},
+				{"type": "text", "text": "hello to you"}
+			]}
+		]
+	}`
+
+	inbound := &inboundAnthropic.MessagesInbound{}
+	internalReq, err := inbound.TransformRequest(context.Background(), []byte(anthropicBody))
+	if err != nil {
+		t.Fatalf("anthropic inbound failed: %v", err)
+	}
+
+	outbound := &ChatOutbound{}
+	httpReq, err := outbound.TransformRequest(context.Background(), internalReq, "https://api.deepseek.com/v1", "test-key")
+	if err != nil {
+		t.Fatalf("openai outbound failed: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(readRequestBody(t, httpReq.Body), &payload); err != nil {
+		t.Fatalf("failed to parse outgoing request: %v", err)
+	}
+	msgs, ok := payload["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages field missing")
+	}
+	assistant := msgs[len(msgs)-1].(map[string]any)
+	content, ok := assistant["content"].([]any)
+	if !ok {
+		t.Fatalf("expected content array with thinking block, got: %v", assistant)
+	}
+	sawThinking := false
+	for _, c := range content {
+		block, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if block["type"] == "thinking" {
+			sawThinking = true
+			if block["signature"] != "sig-deepseek-abc" {
+				t.Fatalf("signature-only thinking block lost its signature: %v", block)
+			}
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("content[].thinking not passed back for signature-only block, assistant message: %v", assistant)
+	}
+}

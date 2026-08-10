@@ -478,6 +478,17 @@ func deepSeekThinkingParts(msg *model.Message) []model.MessageContentPart {
 				Thinking:  strOrNil(rb.Text),
 				Signature: strOrNil(rb.Signature),
 			})
+		case model.ReasoningBlockKindSignature:
+			// 响应侧保留的 signature-only thinking 块（thinking 为空但带
+			// signature，DeepSeek / 中转站常见）在 Anthropic 入站被
+			// geminiThoughtSignatureShim 归类为 Signature 块。DeepSeek
+			// thinking-mode 契约要求原样回传，否则上游 400
+			// ("content[].thinking in the thinking mode must be passed back")，
+			// 因此也作为 content[].thinking 块回传（不带文本，仅 signature）。
+			parts = append(parts, model.MessageContentPart{
+				Type:      "thinking",
+				Signature: strOrNil(rb.Signature),
+			})
 		case model.ReasoningBlockKindRedacted:
 			parts = append(parts, model.MessageContentPart{
 				Type:             "redacted_thinking",

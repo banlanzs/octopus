@@ -128,13 +128,12 @@ func listLLMByChannel(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 附加自动排序健康度与熔断冷却摘要（只读）：有采样、或存在渠道
-	// 降级/熔断信号时才携带，避免空数据噪音。
+	// 附加自动排序健康度与熔断冷却摘要（只读）。所有模型都携带：
+	// 无采样时 samples=0，前端展示"暂无采样（冷启动）"占位，方便观察
+	// 哪些模型从未被调用。
 	for i := range channels {
 		h := balancer.AutoRankHealthFor(channels[i].ChannelID, channels[i].Name)
-		if h.Samples > 0 || h.ChannelTripped || h.Degraded {
-			channels[i].AutoRank = &h
-		}
+		channels[i].AutoRank = &h
 	}
 	resp.Success(c, channels)
 }
