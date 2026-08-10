@@ -627,3 +627,92 @@ func TestDeepSeekSignatureOnlyThinkingReplay(t *testing.T) {
 		t.Fatalf("content[].thinking not passed back for signature-only block, assistant message: %v", assistant)
 	}
 }
+
+// TestDeepSeekThinkingToolRoundTripNoDuplicate 模拟 Claude Code 工具调用多轮场景的 thinking 完整往返：
+// 1) DeepSeek 流式响应（thinking + text + tool_use）聚合
+// 2) 聚合消息作为 Claude Code 历史回传（Anthropic 格式）
+// 3) outbound payload 必须含 content[].thinking + tool_calls + reasoning_content
+func TestDeepSeekThinkingToolRoundTripNoDuplicate(t *testing.T) {
+	// --- 1. DeepSeek 流式响应（OpenAI chunk）→ 聚合 ---
+	chunks := []string{
+		`{"id":"x1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":"let me check","signature":"sig-1"}]}}]}`,
+		`{"id":"x1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"I will look it up"}]}}]}`,
+		`{"id":"x1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"search","arguments":"{\"q\":\"x\"}"}}]}}]}`,
+		`{"id":"x1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`{"id":"x1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
+		`[DONE]`,
+	}
+	outbound := &ChatOutbound{}
+	var agg model.StreamAggregator
+	for _, c := range chunks {
+		events, err := outbound.TransformStreamEvent(context.Background(), []byte(c))
+		if err != nil {
+			t.Fatalf("chunk err: %v", err)
+		}
+		for _, e := range events {
+			if resp := model.InternalResponseFromStreamEvents([]model.StreamEvent{e}); resp != nil {
+				agg.Add(resp)
+			}
+		}
+	}
+	_ = agg
+	// --- 2. Claude Code 下一轮请求（Anthropic）：历史 assistant（thinking+text+tool_use）+ user(tool_result) ---
+	anthropicBody := `{
+		"model": "deepseek-v4-flash",
+		"max_tokens": 1024,
+		"thinking": {"type": "enabled", "budget_tokens": 2048},
+		"messages": [
+			{"role": "user", "content": "search something"},
+			{"role": "assistant", "content": [
+				{"type": "thinking", "thinking": "let me check", "signature": "sig-1"},
+				{"type": "text", "text": "I will look it up"},
+				{"type": "tool_use", "id": "call_1", "name": "search", "input": {"q": "x"}}
+			]},
+			{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "result: 42"}]
+			}
+		]
+	}`
+	inbound := &inboundAnthropic.MessagesInbound{}
+	internalReq, err := inbound.TransformRequest(context.Background(), []byte(anthropicBody))
+	if err != nil {
+		t.Fatalf("anthropic inbound failed: %v", err)
+	}
+	httpReq, err := outbound.TransformRequest(context.Background(), internalReq, "https://api.deepseek.com/v1", "test-key")
+	if err != nil {
+		t.Fatalf("outbound failed: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(readRequestBody(t, httpReq.Body), &payload); err != nil {
+		t.Fatalf("parse payload: %v", err)
+	}
+	msgs := payload["messages"].([]any)
+	for i, m := range msgs {
+		b, _ := json.Marshal(m)
+		t.Logf("out msg[%d]: %s", i, string(b))
+	}
+	assistant := msgs[1].(map[string]any)
+	content := assistant["content"].([]any)
+	thinkingCount := 0
+	for _, c := range content {
+		blk := c.(map[string]any)
+		if blk["type"] == "thinking" {
+			thinkingCount++
+			if blk["thinking"] != "let me check" || blk["signature"] != "sig-1" {
+				t.Fatalf("thinking block mismatch: %v", blk)
+			}
+		}
+	}
+	if thinkingCount == 0 {
+		t.Fatalf("content[].thinking lost in tool-call round trip")
+	}
+	if thinkingCount > 1 {
+		t.Fatalf("content[].thinking duplicated in tool-call round trip: %v", content)
+	}
+	if tc, ok := assistant["tool_calls"].([]any); !ok || len(tc) == 0 {
+		t.Fatalf("tool_calls lost in round trip: %v", assistant)
+	}
+	if rc := assistant["reasoning_content"]; rc != "let me check" {
+		t.Fatalf("top-level reasoning_content missing: %v", assistant)
+	}
+}
+

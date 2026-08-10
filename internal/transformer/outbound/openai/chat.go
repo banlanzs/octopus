@@ -467,7 +467,13 @@ func joinThinkingText(parts []model.MessageContentPart) string {
 }
 
 // deepSeekThinkingParts 从消息的 ReasoningBlocks / ReasoningContent 构建
-// content[].thinking 与 redacted_thinking 块。
+// content[].thinking 与 redacted_thinking 块。优先级：
+//  1. ReasoningBlocks（Anthropic inbound 的权威来源；该路径还会同时写入
+//     顶层 ReasoningContent，若再从顶层追加会导致 content[].thinking 块
+//     重复而被上游拒绝）；
+//  2. 消息已携带的 content[].thinking 块（OpenAI round-trip，MultipleContent
+//     原样保留，materialize 不重组）；
+//  3. 顶层 reasoning_content（OpenAI 兼容客户端直接回传该字段时兜底）。
 func deepSeekThinkingParts(msg *model.Message) []model.MessageContentPart {
 	var parts []model.MessageContentPart
 	for _, rb := range msg.ReasoningBlocks {
@@ -496,6 +502,17 @@ func deepSeekThinkingParts(msg *model.Message) []model.MessageContentPart {
 			})
 		}
 	}
+	if len(parts) > 0 {
+		return parts
+	}
+	// ReasoningBlocks 为空：若消息已带 content[].thinking 块（OpenAI
+	// round-trip），返回空让 materialize 保留原样，避免重复重建。
+	for _, p := range msg.Content.MultipleContent {
+		if p.Type == "thinking" || p.Type == "redacted_thinking" {
+			return nil
+		}
+	}
+	// 仅剩顶层 reasoning_content（OpenAI 兼容客户端直接回传该字段）。
 	if msg.ReasoningContent != nil && *msg.ReasoningContent != "" {
 		parts = append(parts, model.MessageContentPart{
 			Type:      "thinking",
