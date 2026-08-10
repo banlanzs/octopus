@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { Layers, GripVertical, X, Trash2 } from 'lucide-react';
+import { Layers, GripVertical, X, Trash2, TriangleAlert } from 'lucide-react';
 import {
     DragDropContext,
     Draggable,
@@ -12,7 +12,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
 import { getModelIcon } from '@/lib/model-icons';
-import type { LLMChannel } from '@/api/endpoints/model';
+import type { AutoRankHealth, LLMChannel } from '@/api/endpoints/model';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/animate-ui/components/animate/tooltip';
 import { useTranslations } from 'next-intl';
 
@@ -20,6 +20,97 @@ export interface SelectedMember extends LLMChannel {
     id: string;
     item_id?: number;
     weight?: number;
+}
+
+// formatCooldown 把秒数格式化为可读的剩余冷却时长。
+function formatCooldown(sec: number): string {
+    if (sec <= 0) return '0s';
+    if (sec < 60) return `${Math.ceil(sec)}s`;
+    const min = Math.floor(sec / 60);
+    const rest = sec % 60;
+    if (rest === 0) return `${min}m`;
+    return `${min}m${rest}s`;
+}
+
+// HealthBadge 展示 (渠道, 模型) 的自动排序健康度摘要：渠道熔断（红）、
+// 渠道降级（琥珀）、有采样则显示成功率，无采样显示冷启动占位。
+function HealthBadge({ rank }: { rank: AutoRankHealth }) {
+    const t = useTranslations('group.health.autoRank');
+
+    const tripped = rank.channel_tripped;
+    const degraded = rank.degraded;
+    const hasSamples = rank.samples > 0;
+
+    let label: string;
+    let tone: string;
+    if (tripped) {
+        label = formatCooldown(rank.channel_cooldown_sec);
+        tone = 'border-destructive/40 bg-destructive/10 text-destructive';
+    } else if (degraded) {
+        label = '↓';
+        tone = 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400';
+    } else if (hasSamples) {
+        const pct = Math.round(rank.success_rate * 100);
+        label = `${pct}%`;
+        tone =
+            pct >= 90
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                : pct >= 70
+                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                  : 'border-destructive/40 bg-destructive/10 text-destructive';
+    } else {
+        label = '—';
+        tone = 'border-border bg-muted/40 text-muted-foreground';
+    }
+
+    return (
+        <Tooltip side="top" sideOffset={8} align="start">
+            <TooltipTrigger asChild>
+                <span
+                    className={cn(
+                        'inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded border px-1 text-[10px] font-semibold leading-none cursor-help',
+                        tone
+                    )}
+                >
+                    {label}
+                </span>
+            </TooltipTrigger>
+            <TooltipContent>
+                <div className="flex flex-col gap-1 text-xs">
+                    <div className="flex items-center gap-1 font-medium">
+                        <TriangleAlert className="size-3" />
+                        {t('title')}
+                    </div>
+                    {hasSamples ? (
+                        <>
+                            <span>
+                                {t('score')}: <span className="font-medium">{rank.score.toFixed(1)}</span>
+                            </span>
+                            <span>
+                                {t('successRate')}: <span className="font-medium">{(rank.success_rate * 100).toFixed(1)}%</span>
+                            </span>
+                            <span>
+                                {t('latency')}: <span className="font-medium">{Math.round(rank.ewma_latency_ms)}ms</span>
+                            </span>
+                            <span>
+                                {t('samples')}: <span className="font-medium">{rank.samples}</span>（{t('failures')}{' '}
+                                {rank.failures}）
+                            </span>
+                        </>
+                    ) : (
+                        <span className="text-muted-foreground">{t('empty')}</span>
+                    )}
+                    {degraded && <span className="text-amber-600 dark:text-amber-400">{t('degradedHint')}</span>}
+                    {tripped && (
+                        <span className="text-destructive">
+                            {t('tripped')} · {t('cooldown', { time: formatCooldown(rank.channel_cooldown_sec) })} ·{' '}
+                            {t('tripCount', { count: rank.channel_trip_count })}
+                        </span>
+                    )}
+                </div>
+            </TooltipContent>
+        </Tooltip>
+    );
 }
 
 function reorderList<T>(list: T[], startIndex: number, endIndex: number): T[] {
@@ -112,15 +203,18 @@ function MemberItem({
                 </span>
 
                 <div className="flex flex-col min-w-0 flex-1">
-                    <Tooltip side="top" sideOffset={10} align="start">
-                        <TooltipTrigger className={cn(
-                            'text-sm font-medium truncate leading-tight',
-                            isDisabled && 'text-muted-foreground'
-                        )}>
-                            {member.name}
-                        </TooltipTrigger>
-                        <TooltipContent key={member.name}>{member.name}</TooltipContent>
-                    </Tooltip>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                        <Tooltip side="top" sideOffset={10} align="start">
+                            <TooltipTrigger className={cn(
+                                'text-sm font-medium truncate leading-tight',
+                                isDisabled && 'text-muted-foreground'
+                            )}>
+                                {member.name}
+                            </TooltipTrigger>
+                            <TooltipContent key={member.name}>{member.name}</TooltipContent>
+                        </Tooltip>
+                        {member.auto_rank && <HealthBadge rank={member.auto_rank} />}
+                    </div>
                     <span className="text-[10px] text-muted-foreground truncate leading-tight">{sourceLabel}</span>
                 </div>
 

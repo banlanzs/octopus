@@ -619,7 +619,20 @@
             },
             "empty": "暂无健康快照。",
             "errorDetails": "错误详情",
-            "noHttpStatus": "无 HTTP 状态"
+            "noHttpStatus": "无 HTTP 状态",
+            "autoRank": {
+                "title": "自动排序健康度",
+                "score": "分数",
+                "successRate": "成功率",
+                "latency": "延迟",
+                "samples": "采样",
+                "failures": "失败",
+                "empty": "暂无采样（冷启动，自动排序靠后）",
+                "degradedHint": "渠道降级：窗口内多模型同时恶化，该渠道得分被统一压低",
+                "tripped": "渠道熔断中",
+                "cooldown": "冷却剩余 {time}",
+                "tripCount": "累计熔断 {count} 次"
+            }
         },
         "empty": "暂无分组，点击左上角按钮创建",
         "autoGroup": {

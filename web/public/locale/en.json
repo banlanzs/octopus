@@ -619,7 +619,20 @@
             },
             "empty": "No health snapshot yet.",
             "errorDetails": "Error details",
-            "noHttpStatus": "No HTTP status"
+            "noHttpStatus": "No HTTP status",
+            "autoRank": {
+                "title": "Auto-rank health",
+                "score": "Score",
+                "successRate": "Success rate",
+                "latency": "Latency",
+                "samples": "Samples",
+                "failures": "Failures",
+                "empty": "No samples yet (cold start, ranked last)",
+                "degradedHint": "Channel degraded: multiple models degraded in the window, scores suppressed",
+                "tripped": "Channel tripped",
+                "cooldown": "Cooldown {time} left",
+                "tripCount": "Tripped {count}× total"
+            }
         },
         "empty": "No groups yet, click the button above to create one",
         "autoGroup": {

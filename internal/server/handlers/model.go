@@ -7,6 +7,7 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/price"
+	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/server/middleware"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
@@ -126,6 +127,14 @@ func listLLMByChannel(c *gin.Context) {
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// 附加自动排序健康度与熔断冷却摘要（只读）：有采样、或存在渠道
+	// 降级/熔断信号时才携带，避免空数据噪音。
+	for i := range channels {
+		h := balancer.AutoRankHealthFor(channels[i].ChannelID, channels[i].Name)
+		if h.Samples > 0 || h.ChannelTripped || h.Degraded {
+			channels[i].AutoRank = &h
+		}
 	}
 	resp.Success(c, channels)
 }

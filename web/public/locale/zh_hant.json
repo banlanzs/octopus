@@ -619,7 +619,20 @@
             },
             "empty": "暫無健康快照。",
             "errorDetails": "錯誤詳情",
-            "noHttpStatus": "無 HTTP 狀態"
+            "noHttpStatus": "無 HTTP 狀態",
+            "autoRank": {
+                "title": "自動排序健康度",
+                "score": "分數",
+                "successRate": "成功率",
+                "latency": "延遲",
+                "samples": "採樣",
+                "failures": "失敗",
+                "empty": "暫無採樣（冷啟動，自動排序靠後）",
+                "degradedHint": "渠道降級：視窗內多個模型同時惡化，該渠道得分被統一壓低",
+                "tripped": "渠道熔斷中",
+                "cooldown": "冷卻剩餘 {time}",
+                "tripCount": "累計熔斷 {count} 次"
+            }
         },
         "empty": "暫無分組，點擊左上角按鈕建立",
         "autoGroup": {

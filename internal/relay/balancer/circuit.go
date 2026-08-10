@@ -99,6 +99,32 @@ func ChannelRecoveryIn(channelID int) time.Duration {
 	return remaining
 }
 
+// ChannelCircuitStatus 只读返回渠道级熔断状态（供管理面板展示，不修改
+// 状态机，也不会把 Open → HalfOpen 推进）：tripped 是否处于熔断且未过
+// 冷却，remaining 剩余冷却时长（HalfOpen 返回 0），tripCount 累计熔断次数。
+func ChannelCircuitStatus(channelID int) (tripped bool, remaining time.Duration, tripCount int) {
+	v, ok := globalBreaker.Load(channelCircuitKey(channelID))
+	if !ok {
+		return false, 0, 0
+	}
+	entry := v.(*circuitEntry)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	switch entry.State {
+	case StateOpen:
+		cooldown := GetCooldown(entry.TripCount)
+		elapsed := time.Since(entry.LastFailureTime)
+		if elapsed >= cooldown {
+			return false, 0, entry.TripCount
+		}
+		return true, cooldown - elapsed, entry.TripCount
+	case StateHalfOpen:
+		return true, 0, entry.TripCount
+	default:
+		return false, 0, entry.TripCount
+	}
+}
+
 // RecordChannelSuccess 渠道级成功：重置渠道熔断状态。
 func RecordChannelSuccess(channelID int) {
 	key := channelCircuitKey(channelID)

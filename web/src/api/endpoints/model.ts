@@ -34,6 +34,35 @@ export interface LLMChannel {
     site_name?: string;
     site_account_name?: string;
     endpoint_type?: string;
+    /**
+     * 自动排序健康度摘要（AutoRank 被动统计 + 渠道级熔断状态）。
+     * 有采样或存在熔断/降级信号时由后端附带，用于解释自动排序的流量分配。
+     */
+    auto_rank?: AutoRankHealth;
+}
+
+/**
+ * 渠道-模型的自动排序健康度摘要（对应后端 model.LLMAutoRankHealth）
+ */
+export interface AutoRankHealth {
+    /** 时间窗口内采样请求数 */
+    samples: number;
+    /** 窗口内失败请求数 */
+    failures: number;
+    /** 窗口成功率 0~1 */
+    success_rate: number;
+    /** EWMA 平滑延迟（毫秒） */
+    ewma_latency_ms: number;
+    /** 基础排序得分：成功率*100 - 延迟(秒) */
+    score: number;
+    /** 渠道是否处于聚合惩罚（多模型同时恶化，得分被统一压低） */
+    degraded: boolean;
+    /** 渠道级熔断是否生效 */
+    channel_tripped: boolean;
+    /** 渠道级熔断剩余冷却秒数 */
+    channel_cooldown_sec: number;
+    /** 渠道级累计熔断次数 */
+    channel_trip_count: number;
 }
 
 /**

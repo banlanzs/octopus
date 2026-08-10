@@ -394,3 +394,54 @@ func TestGroupMedianLatencyMS(t *testing.T) {
 		t.Fatalf("expected median 1200, got %v", m)
 	}
 }
+
+// AutoRankHealthFor 只读摘要：样本/分数/降级/熔断状态正确聚合，
+// 且不推进熔断状态机（Open 状态在冷却期内保持 Open）。
+func TestAutoRankHealthFor(t *testing.T) {
+	AutoRankReset()
+	ReapBreakers(time.Now().Add(time.Hour), time.Minute)
+
+	const ch, mdl = 7, "deepseek-v4-flash"
+	// 无记录 → 零值，不降级、不熔断
+	h := AutoRankHealthFor(ch, mdl)
+	if h.Samples != 0 || h.Score != 0 || h.ChannelTripped || h.Degraded {
+		t.Fatalf("expected empty health for unknown key, got %+v", h)
+	}
+
+	// 记录 3 次样本：2 成功 1 失败，延迟 1000ms
+	for i := 0; i < 2; i++ {
+		RecordAutoSample(ch, mdl, true, 1000)
+	}
+	RecordAutoSample(ch, mdl, false, 1000)
+	h = AutoRankHealthFor(ch, mdl)
+	if h.Samples != 3 || h.Failures != 1 {
+		t.Fatalf("expected samples=3 failures=1, got %+v", h)
+	}
+	if math.Abs(h.SuccessRate-2.0/3.0) > 1e-9 {
+		t.Fatalf("expected success rate 2/3, got %v", h.SuccessRate)
+	}
+	if h.EWMALatencyMS <= 0 || h.Score <= 0 {
+		t.Fatalf("expected positive latency/score, got %+v", h)
+	}
+
+	// 渠道级熔断：连续失败达到阈值后 Open，健康摘要应带剩余冷却与次数
+	for i := int64(0); i < channelThreshold(); i++ {
+		RecordChannelFailure(ch, FailureHard)
+	}
+	h = AutoRankHealthFor(ch, mdl)
+	if !h.ChannelTripped {
+		t.Fatalf("expected channel tripped after threshold failures, got %+v", h)
+	}
+	if h.ChannelCooldownSec <= 0 {
+		t.Fatalf("expected positive cooldown, got %+v", h)
+	}
+	if h.ChannelTripCount < 1 {
+		t.Fatalf("expected trip count >= 1, got %+v", h)
+	}
+	// 只读：冷却期内状态不应被推进为 HalfOpen（无试探请求）
+	tripped, _, _ := ChannelCircuitStatus(ch)
+	if !tripped {
+		t.Fatalf("read-only status must not advance Open -> HalfOpen")
+	}
+	AutoRankReset()
+}

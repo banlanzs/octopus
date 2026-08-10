@@ -185,6 +185,28 @@ func GetAutoRankStats(channelID int, modelName string) AutoRankStats {
 	return e.stats(time.Now())
 }
 
+// AutoRankHealthFor 返回 (channel, model) 的 AutoRank 摘要与渠道级熔断状态，
+// 供管理面板在分组模型列表中展示健康度与冷却时长。只读：不写入样本、
+// 不推进熔断状态机（Open → HalfOpen 等）。
+func AutoRankHealthFor(channelID int, modelName string) model.LLMAutoRankHealth {
+	st := GetAutoRankStats(channelID, modelName)
+	h := model.LLMAutoRankHealth{
+		Samples:       st.Samples,
+		Failures:      st.Failures,
+		SuccessRate:   st.SuccessRate,
+		EWMALatencyMS: st.EWMALatencyMS,
+		Score:         scoreFromStats(st),
+		Degraded:      IsChannelDegraded(channelID),
+	}
+	tripped, remaining, tripCount := ChannelCircuitStatus(channelID)
+	h.ChannelTripped = tripped
+	h.ChannelTripCount = int64(tripCount)
+	if tripped {
+		h.ChannelCooldownSec = int64(remaining.Seconds())
+	}
+	return h
+}
+
 func (e *autoRankEntry) stats(now time.Time) AutoRankStats {
 	e.mu.Lock()
 	defer e.mu.Unlock()
