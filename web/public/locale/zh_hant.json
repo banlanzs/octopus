@@ -268,6 +268,61 @@
                 "placeholder": "請輸入冷卻分鐘數"
             }
         },
+        "autoRank": {
+            "title": "自動排序（Auto 模式）",
+            "hint": "僅在分組切換為 Auto 模式時生效。基於真實請求效能（成功率+延遲）排序，冷啟動/低流量模型透過探索比例獲得採樣機會，樣本充足後參與正常排序。",
+            "enabled": {
+                "label": "啟用自動排序",
+                "description": "關閉後 Auto 模式退化為按原設定順序轉發（不排序、不學習）。"
+            },
+            "exploreRatio": {
+                "label": "探索比例（%）",
+                "placeholder": "20",
+                "description": "按該比例把欠採樣（含無樣本）候選提前嘗試，讓冷啟動模型累積樣本；多個欠採樣候選會隨機輪換。"
+            },
+            "minSamples": {
+                "label": "最小樣本數",
+                "placeholder": "3",
+                "description": "樣本達到該值後才按得分參與排序；不足時排在充分採樣候選之後。"
+            },
+            "interval": {
+                "label": "學習間隔（秒）",
+                "placeholder": "60",
+                "description": "後台控制面每該時間把統計快照落庫並回收過期視窗。"
+            },
+            "channelFactor": {
+                "label": "渠道級聚合健康修正",
+                "description": "視窗內該渠道多個模型同時惡化時，整體壓低該渠道所有模型得分（單模型失敗不影響同渠道其他模型）。"
+            },
+            "channelMinSamples": {
+                "label": "渠道最小樣本總數",
+                "placeholder": "8"
+            },
+            "channelMinModels": {
+                "label": "最小失敗模型數（≥2）",
+                "placeholder": "2"
+            },
+            "channelDegradeRate": {
+                "label": "降級成功率閾值（%）",
+                "placeholder": "85"
+            },
+            "ttfb": {
+                "label": "相對 TTFB 懲罰",
+                "description": "慢於組內中位延遲的模型按慢速比扣分（只罰慢不獎快），預設關閉。"
+            },
+            "ttfbWeight": {
+                "label": "懲罰權重",
+                "placeholder": "20"
+            },
+            "ttfbMaxSlowRatio": {
+                "label": "慢速比上限（%）",
+                "placeholder": "200"
+            },
+            "ttfbMinConfidentSample": {
+                "label": "置信樣本量",
+                "placeholder": "10"
+            }
+        },
         "saved": "已儲存",
         "saveFailed": "儲存失敗",
         "backup": {

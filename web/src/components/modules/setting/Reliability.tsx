@@ -1,7 +1,7 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import { Hash, HeartPulse, ShieldCheck, Timer, TimerOff, type LucideIcon } from 'lucide-react';
+import { Compass, Gauge, Hash, HeartPulse, Layers, ListChecks, ShieldCheck, Timer, TimerOff, type LucideIcon } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { SettingKey } from '@/api/endpoints/setting';
@@ -51,6 +51,9 @@ export function SettingReliability() {
     const t = useTranslations('setting');
     const outlier = useSettingToggle(SettingKey.OutlierRetireEnabled);
     const groupHealth = useSettingToggle(SettingKey.GroupHealthEnabled);
+    const autoRank = useSettingToggle(SettingKey.AutoRankEnabled);
+    const channelFactor = useSettingToggle(SettingKey.AutoRankChannelFactorEnabled);
+    const ttfb = useSettingToggle(SettingKey.AutoRankTTFBEnabled);
 
     return (
         <SettingCard icon={ShieldCheck} title={t('reliability.title')}>
@@ -96,6 +99,101 @@ export function SettingReliability() {
                     max={f.max}
                 />
             ))}
+
+            {/* 自动排序（Auto 模式） */}
+            <SettingSection title={t('autoRank.title')} tooltip={t('autoRank.hint')} />
+            <SettingRow label={t('autoRank.enabled.label')} tooltip={t('autoRank.enabled.description')}>
+                <Switch checked={autoRank.enabled} onCheckedChange={autoRank.toggle} />
+            </SettingRow>
+            {autoRank.enabled && (
+                <>
+                    <NumberFieldRow
+                        settingKey={SettingKey.AutoRankExploreRatio}
+                        label={t('autoRank.exploreRatio.label')}
+                        placeholder={t('autoRank.exploreRatio.placeholder')}
+                        tooltip={t('autoRank.exploreRatio.description')}
+                        icon={Compass}
+                        min={0}
+                        max={100}
+                    />
+                    <NumberFieldRow
+                        settingKey={SettingKey.AutoRankMinSamples}
+                        label={t('autoRank.minSamples.label')}
+                        placeholder={t('autoRank.minSamples.placeholder')}
+                        tooltip={t('autoRank.minSamples.description')}
+                        icon={ListChecks}
+                        min={1}
+                    />
+                    <NumberFieldRow
+                        settingKey={SettingKey.AutoRankInterval}
+                        label={t('autoRank.interval.label')}
+                        placeholder={t('autoRank.interval.placeholder')}
+                        tooltip={t('autoRank.interval.description')}
+                        icon={Timer}
+                        min={1}
+                    />
+
+                    <SettingRow label={t('autoRank.channelFactor.label')} tooltip={t('autoRank.channelFactor.description')}>
+                        <Switch checked={channelFactor.enabled} onCheckedChange={channelFactor.toggle} />
+                    </SettingRow>
+                    {channelFactor.enabled && (
+                        <>
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankChannelMinSamples}
+                                label={t('autoRank.channelMinSamples.label')}
+                                placeholder={t('autoRank.channelMinSamples.placeholder')}
+                                icon={Layers}
+                                min={1}
+                            />
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankChannelMinModels}
+                                label={t('autoRank.channelMinModels.label')}
+                                placeholder={t('autoRank.channelMinModels.placeholder')}
+                                icon={Layers}
+                                min={2}
+                            />
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankChannelDegradeRate}
+                                label={t('autoRank.channelDegradeRate.label')}
+                                placeholder={t('autoRank.channelDegradeRate.placeholder')}
+                                icon={Layers}
+                                min={0}
+                                max={100}
+                            />
+                        </>
+                    )}
+
+                    <SettingRow label={t('autoRank.ttfb.label')} tooltip={t('autoRank.ttfb.description')}>
+                        <Switch checked={ttfb.enabled} onCheckedChange={ttfb.toggle} />
+                    </SettingRow>
+                    {ttfb.enabled && (
+                        <>
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankTTFBWeight}
+                                label={t('autoRank.ttfbWeight.label')}
+                                placeholder={t('autoRank.ttfbWeight.placeholder')}
+                                icon={Gauge}
+                                min={0}
+                            />
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankTTFBMaxSlowRatio}
+                                label={t('autoRank.ttfbMaxSlowRatio.label')}
+                                placeholder={t('autoRank.ttfbMaxSlowRatio.placeholder')}
+                                icon={Gauge}
+                                min={0}
+                                max={100}
+                            />
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankTTFBMinConfidentSample}
+                                label={t('autoRank.ttfbMinConfidentSample.label')}
+                                placeholder={t('autoRank.ttfbMinConfidentSample.placeholder')}
+                                icon={Gauge}
+                                min={1}
+                            />
+                        </>
+                    )}
+                </>
+            )}
         </SettingCard>
     );
 }

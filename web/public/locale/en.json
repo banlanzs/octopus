@@ -268,6 +268,61 @@
                 "placeholder": "Enter cooldown minutes"
             }
         },
+        "autoRank": {
+            "title": "Auto ranking (Auto mode)",
+            "hint": "Only takes effect when a group is switched to Auto mode. Ranks candidates by live request performance (success rate + latency); cold-start / low-traffic models get sampling chances via the explore ratio, then join normal ranking once sufficiently sampled.",
+            "enabled": {
+                "label": "Enable auto ranking",
+                "description": "When disabled, Auto mode falls back to the original configured order (no ranking, no learning)."
+            },
+            "exploreRatio": {
+                "label": "Explore ratio (%)",
+                "placeholder": "20",
+                "description": "Ratio of requests that try an under-sampled (including zero-sample) candidate first, so cold-start models accumulate samples; under-sampled candidates are rotated randomly."
+            },
+            "minSamples": {
+                "label": "Min samples",
+                "placeholder": "3",
+                "description": "A candidate joins score-based ranking once it has at least this many samples; below that it ranks after sufficiently-sampled candidates."
+            },
+            "interval": {
+                "label": "Learn interval (s)",
+                "placeholder": "60",
+                "description": "Interval at which the background controller persists stats snapshots and reaps expired windows."
+            },
+            "channelFactor": {
+                "label": "Channel aggregate health correction",
+                "description": "When multiple models of a channel degrade in the window, suppress all its models' scores (a single failing model does not affect siblings)."
+            },
+            "channelMinSamples": {
+                "label": "Channel min total samples",
+                "placeholder": "8"
+            },
+            "channelMinModels": {
+                "label": "Min failing models (\u22652)",
+                "placeholder": "2"
+            },
+            "channelDegradeRate": {
+                "label": "Degrade success-rate threshold (%)",
+                "placeholder": "85"
+            },
+            "ttfb": {
+                "label": "Relative TTFB penalty",
+                "description": "Models slower than the group median latency are penalized proportionally (only slows are penalized), off by default."
+            },
+            "ttfbWeight": {
+                "label": "Penalty weight",
+                "placeholder": "20"
+            },
+            "ttfbMaxSlowRatio": {
+                "label": "Max slow ratio (%)",
+                "placeholder": "200"
+            },
+            "ttfbMinConfidentSample": {
+                "label": "Confidence sample count",
+                "placeholder": "10"
+            }
+        },
         "saved": "Saved",
         "saveFailed": "Save failed",
         "backup": {
