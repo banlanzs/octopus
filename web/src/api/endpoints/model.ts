@@ -39,10 +39,14 @@ export interface LLMChannel {
      */
     has_channel_price?: boolean;
     /**
-     * 该 (渠道, 模型) 的计费价格（渠道价优先，未配置时为全局兜底价）。
-     * 由后端在 /api/v1/model/channel 附带，供价格页渲染。
+     * 该 (渠道, 模型) 的计费价格（已乘渠道倍率，供价格页直接渲染展示）。
+     * 由后端在 /api/v1/model/channel 附带。
      */
     price?: LLMPrice;
+    /**
+     * 该渠道的计费倍率（默认 1）。最终单价 = 模型价格 × 倍率。
+     */
+    price_multiplier?: number;
     /**
      * 自动排序健康度摘要（AutoRank 被动统计 + 渠道级熔断状态）。
      * 有采样或存在熔断/降级信号时由后端附带，用于解释自动排序的流量分配。

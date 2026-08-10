@@ -278,6 +278,10 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "force_deep_seek_thinking")
 		updates.ForceDeepSeekThinking = *req.ForceDeepSeekThinking
 	}
+	if req.PriceMultiplier != nil {
+		selectFields = append(selectFields, "price_multiplier")
+		updates.PriceMultiplier = *req.PriceMultiplier
+	}
 
 	// 只有当有字段需要更新时才执行 UPDATE
 	if len(selectFields) > 0 {

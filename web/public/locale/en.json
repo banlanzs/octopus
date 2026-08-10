@@ -762,7 +762,8 @@
             "deleteFailed": "Delete failed",
             "channelUpdated": "Channel model price updated",
             "restored": "Reverted to global default",
-            "restoreFailed": "Restore failed"
+            "restoreFailed": "Restore failed",
+            "multiplierUpdated": "Multiplier updated"
         },
         "card": {
             "inputCache": "Input/Cache",
@@ -786,7 +787,9 @@
         "models": "Models",
         "restoreDefault": "Restore Global Default",
         "restoreDefaultHint": "Revert to the global official price",
-        "empty": "No channel models yet"
+        "empty": "No channel models yet",
+        "multiplier": "Multiplier",
+        "multiplierHint": "Final price = model price × multiplier"
     },
     "log": {
         "list": {

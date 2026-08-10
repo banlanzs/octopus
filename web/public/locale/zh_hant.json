@@ -762,7 +762,8 @@
             "deleteFailed": "刪除失敗",
             "channelUpdated": "渠道模型價格已更新",
             "restored": "已恢復全域預設價",
-            "restoreFailed": "恢復失敗"
+            "restoreFailed": "恢復失敗",
+            "multiplierUpdated": "倍率已更新"
         },
         "card": {
             "inputCache": "輸入/快取",
@@ -786,7 +787,9 @@
         "models": "模型",
         "restoreDefault": "恢復全域預設價",
         "restoreDefaultHint": "回退到全域官方價格",
-        "empty": "暫無渠道模型"
+        "empty": "暫無渠道模型",
+        "multiplier": "倍率",
+        "multiplierHint": "最終單價 = 模型價格 × 倍率"
     },
     "log": {
         "list": {

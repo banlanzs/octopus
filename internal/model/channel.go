@@ -80,6 +80,9 @@ type Channel struct {
 	// 参数并重组 content[].thinking 块回传。用于中转站 DeepSeek 模型名不含
 	// "deepseek" 的渠道（否则会被当作普通 OpenAI 兼容模型剥离 thinking）。
 	ForceDeepSeekThinking bool `json:"force_deep_seek_thinking" gorm:"default:false"`
+	// PriceMultiplier 渠道计费倍率。最终单价 = 模型价格 × 倍率。
+	// 默认 1；0 视为 1（兼容旧数据未设置）。
+	PriceMultiplier       float64 `json:"price_multiplier" gorm:"default:1;not null"`
 	ChannelProxy          *string `json:"-" gorm:"column:channel_proxy"`
 	Stats         *StatsChannel         `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
 	MatchRegex    *string               `json:"match_regex"`
@@ -160,6 +163,8 @@ type ChannelUpdateRequest struct {
 	MatchRegex    *string                `json:"match_regex,omitempty"`
 	// ForceDeepSeekThinking 强制启用 DeepSeek `thinking` 参数透传（中转站 DeepSeek 别名渠道）。
 	ForceDeepSeekThinking *bool `json:"force_deep_seek_thinking,omitempty"`
+	// PriceMultiplier 渠道计费倍率。最终单价 = 模型价格 × 倍率。
+	PriceMultiplier *float64 `json:"price_multiplier,omitempty"`
 
 	KeysToAdd    []ChannelKeyAddRequest    `json:"keys_to_add,omitempty"`
 	KeysToUpdate []ChannelKeyUpdateRequest `json:"keys_to_update,omitempty"`

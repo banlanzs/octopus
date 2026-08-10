@@ -100,13 +100,32 @@ func GetLLMPrice(modelName string) *model.LLMPrice {
 }
 
 // GetChannelModelPrice 取渠道内模型价格（渠道价优先），未配置时回退到全局价。
-// channelID <= 0 时直接走全局价。
+// 最终单价 = 模型价格 × 渠道倍率（默认 1；0 视为 1）。
+// channelID <= 0 时直接走全局价（无倍率）。
 func GetChannelModelPrice(channelID int, modelName string) *model.LLMPrice {
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	var p *model.LLMPrice
 	if channelID > 0 {
-		if price, err := op.ChannelModelPriceGet(channelID, modelName); err == nil {
-			return &price
+		if cp, err := op.ChannelModelPriceGet(channelID, modelName); err == nil {
+			p = &cp
 		}
 	}
-	return GetLLMPrice(modelName)
+	if p == nil {
+		p = GetLLMPrice(modelName)
+	}
+	if p == nil || channelID <= 0 {
+		return p
+	}
+	// 应用渠道倍率
+	ch, err := op.ChannelGet(channelID, context.Background())
+	if err != nil || ch.PriceMultiplier == 0 {
+		return p
+	}
+	m := ch.PriceMultiplier
+	return &model.LLMPrice{
+		Input:      p.Input * m,
+		Output:     p.Output * m,
+		CacheRead:  p.CacheRead * m,
+		CacheWrite: p.CacheWrite * m,
+	}
 }

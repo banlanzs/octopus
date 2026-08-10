@@ -35,9 +35,11 @@ type LLMChannel struct {
 	// HasChannelPrice 该 (渠道, 模型) 是否配置了专属渠道价（true 表示计费不走全局兜底）。
 	// 由 model handler 在 listLLMByChannel 时附加，供前端区分"是否已单独定价"。
 	HasChannelPrice bool `json:"has_channel_price"`
-	// Price 该 (渠道, 模型) 的计费价格（渠道价优先，未配置时为全局兜底价）。
-	// 由 model handler 在 listLLMByChannel 时附加，供管理面板价格页直接渲染。
+	// Price 该 (渠道, 模型) 的计费价格（已乘渠道倍率，供价格页直接渲染展示）。
+	// 由 model handler 在 listLLMByChannel 时附加。
 	Price *LLMPrice `json:"price,omitempty"`
+	// PriceMultiplier 该渠道的计费倍率（默认 1）。最终单价 = 模型价格 × 倍率。
+	PriceMultiplier float64 `json:"price_multiplier,omitempty"`
 	// AutoRank 该 (渠道, 模型) 的自动排序性能统计与熔断状态摘要。
 	// 仅在组内 Auto 模式或存在熔断/降级信号时由 handler 附加，用于
 	// 管理面板解释"自动排序为什么把流量分到这里/那里"。

@@ -139,7 +139,7 @@ func listLLMByChannel(c *gin.Context) {
 	// 附加自动排序健康度与熔断冷却摘要（只读）。所有模型都携带：
 	// 无采样时 samples=0，前端展示"暂无采样（冷启动）"占位，方便观察
 	// 哪些模型从未被调用。
-	// 同时附加计费价格（渠道价优先，未配置时为全局兜底价），供价格页渲染。
+	// 同时附加计费价格（渠道价优先，未配置时为全局兜底价）与渠道倍率，供价格页渲染。
 	for i := range channels {
 		p := price.GetChannelModelPrice(channels[i].ChannelID, channels[i].Name)
 		h := balancer.AutoRankHealthFor(channels[i].ChannelID, channels[i].Name)
@@ -151,6 +151,10 @@ func listLLMByChannel(c *gin.Context) {
 		// 无法据此判断来源，需显式查询）。
 		if _, err := op.ChannelModelPriceGet(channels[i].ChannelID, channels[i].Name); err == nil {
 			channels[i].HasChannelPrice = true
+		}
+		// 附加渠道倍率
+		if ch, err := op.ChannelGet(channels[i].ChannelID, c.Request.Context()); err == nil && ch.PriceMultiplier != 0 {
+			channels[i].PriceMultiplier = ch.PriceMultiplier
 		}
 	}
 	resp.Success(c, channels)

@@ -9,6 +9,7 @@ import {
     useDeleteChannelModelPrice,
     type LLMChannel,
 } from '@/api/endpoints/model';
+import { useUpdateChannel } from '@/api/endpoints/channel';
 import { getModelIcon } from '@/lib/model-icons';
 import { toast } from '@/components/common/Toast';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/animate-ui/components/animate/tooltip';
@@ -42,6 +43,90 @@ function priceOf(model: LLMChannel): EditValues {
         cache_read: (p?.cache_read ?? 0).toString(),
         cache_write: (p?.cache_write ?? 0).toString(),
     };
+}
+
+function ChannelMultiplierEditor({ channelId, multiplier }: { channelId: number; multiplier: number }) {
+    const t = useTranslations('model');
+    const updateChannel = useUpdateChannel();
+    const [editing, setEditing] = useState(false);
+    const [value, setValue] = useState(multiplier.toString());
+    const inputRef = useRef<HTMLInputElement | null>(null);
+
+    // 当外部 multiplier 变化时同步本地显示值
+    useEffect(() => {
+        if (!editing) setValue(multiplier.toString());
+    }, [multiplier, editing]);
+
+    useEffect(() => {
+        if (editing) inputRef.current?.select();
+    }, [editing]);
+
+    const submit = () => {
+        const next = parseFloat(value);
+        if (!isNaN(next) && next > 0 && next !== multiplier) {
+            updateChannel.mutate(
+                { id: channelId, price_multiplier: next },
+                {
+                    onSuccess: () => {
+                        toast.success(t('toast.multiplierUpdated'));
+                    },
+                    onError: (error) => {
+                        toast.error(t('toast.updateFailed'), { description: error.message });
+                        setValue(multiplier.toString());
+                    },
+                }
+            );
+        } else {
+            setValue(multiplier.toString());
+        }
+        setEditing(false);
+    };
+
+    if (editing) {
+        return (
+            <input
+                ref={inputRef}
+                type="number"
+                step="any"
+                min="0"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                onBlur={submit}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') submit();
+                    if (e.key === 'Escape') {
+                        setValue(multiplier.toString());
+                        setEditing(false);
+                    }
+                }}
+                className="w-16 h-6 px-1.5 text-xs tabular-nums rounded-md border border-border bg-background text-foreground outline-none"
+                title={t('multiplierHint')}
+            />
+        );
+    }
+
+    return (
+        <Tooltip side="bottom" sideOffset={6}>
+            <TooltipTrigger asChild>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setValue(multiplier.toString());
+                        setEditing(true);
+                    }}
+                    className="h-6 px-2 text-xs tabular-nums rounded-md border border-border/60 bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors inline-flex items-center gap-1"
+                >
+                    <span>×</span>
+                    <span>{multiplier}</span>
+                </button>
+            </TooltipTrigger>
+            <TooltipContent>
+                {t('multiplier')}
+                <br />
+                {t('multiplierHint')}
+            </TooltipContent>
+        </Tooltip>
+    );
 }
 
 export const ChannelModelItem = memo(function ChannelModelItem({
@@ -277,14 +362,20 @@ export const ModelItem = memo(function ModelItem({
 
     return (
         <div className="rounded-3xl border border-border bg-card/40 p-4 flex flex-col gap-2">
-            <header className="flex items-center justify-between">
+            <header className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-card-foreground truncate flex items-center gap-2">
                     <span className="inline-block h-2 w-2 rounded-full bg-primary/60" />
                     {t('channelGroup', { name: group.channel_name })}
                 </h3>
-                <span className="text-xs text-muted-foreground">
-                    {t('models')}: {group.models.length}
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                    <ChannelMultiplierEditor
+                        channelId={group.channel_id}
+                        multiplier={group.models[0]?.price_multiplier ?? 1}
+                    />
+                    <span className="text-xs text-muted-foreground">
+                        {t('models')}: {group.models.length}
+                    </span>
+                </div>
             </header>
             <div className="flex flex-col gap-2">
                 {group.models.map((model) => (
