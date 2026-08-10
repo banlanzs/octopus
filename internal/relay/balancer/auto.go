@@ -78,7 +78,9 @@ func autoRankExploreRatio() float64 {
 }
 
 // autoRankMaybeExplore 以探索比例把欠采样候选（或随机候选）提前到首位。
-// 仅调整候选顺序，不产生任何网络请求。
+// 仅调整候选顺序，不产生任何网络请求。多个欠采样候选时随机轮换，避免
+// 总是探索排序中最靠前的同一个冷启动模型——否则其他从未被调用的模型
+// 永远积累不到样本（"很多模型从启动起就没被调用过"）。
 func autoRankMaybeExplore(candidates []model.GroupItem) {
 	ratio := autoRankExploreRatio()
 	if ratio <= 0 {
@@ -92,28 +94,36 @@ func autoRankMaybeExplore(candidates []model.GroupItem) {
 		return
 	}
 	minSamples := autoRankMinSamples()
-	if idx := findUnderSampled(candidates, minSamples); idx > 0 {
-		// 优先探索样本不足的候选（冷启动/低流量渠道）
-		item := candidates[idx]
-		copy(candidates[1:idx+1], candidates[0:idx])
+	idx := pickUnderSampled(candidates, minSamples, rand.IntN)
+	if idx < 0 {
+		// 全部已充分采样：随机探索一个非首位候选，维持对性能漂移的感知
+		j := 1 + rand.IntN(n-1)
+		item := candidates[j]
+		copy(candidates[1:j+1], candidates[0:j])
 		candidates[0] = item
 		return
 	}
-	// 全部已充分采样：随机探索一个非首位候选，维持对性能漂移的感知
-	j := 1 + rand.IntN(n-1)
-	item := candidates[j]
-	copy(candidates[1:j+1], candidates[0:j])
-	candidates[0] = item
+	if idx > 0 {
+		item := candidates[idx]
+		copy(candidates[1:idx+1], candidates[0:idx])
+		candidates[0] = item
+	}
+	// idx == 0：首位已是欠采样候选，无需调整。
 }
 
-// findUnderSampled 返回第一个有效样本数低于 minSamples 的候选下标（含无样本）；无则 -1。
-func findUnderSampled(candidates []model.GroupItem, minSamples int) int {
+// pickUnderSampled 从欠采样（样本数 < minSamples，含无样本）候选中随机
+// 返回一个下标；全部已充分采样时返回 -1。rng 注入随机源便于测试。
+func pickUnderSampled(candidates []model.GroupItem, minSamples int, rng func(int) int) int {
+	under := make([]int, 0, len(candidates))
 	for i, item := range candidates {
 		if st := GetAutoRankStats(item.ChannelID, item.ModelName); st.Samples < minSamples {
-			return i
+			under = append(under, i)
 		}
 	}
-	return -1
+	if len(under) == 0 {
+		return -1
+	}
+	return under[rng(len(under))]
 }
 
 type autoRankSample struct {

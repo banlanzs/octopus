@@ -102,7 +102,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyOutlierCFRecoverMinutes, Value: "30"}, // CF 退役渠道 30 分钟后才探活恢复
 		{Key: SettingKeyAutoRankEnabled, Value: "true"},    // 默认启用自动排序（仅在分组切换为 Auto 模式时生效）
 		{Key: SettingKeyAutoRankInterval, Value: "60"},     // 默认每 60 秒执行一次学习/落库
-		{Key: SettingKeyAutoRankExploreRatio, Value: "10"}, // 默认 10% 请求用于探索欠采样候选
+		{Key: SettingKeyAutoRankExploreRatio, Value: "20"}, // 默认 20% 请求用于探索欠采样候选（冷启动模型需足够机会积累样本）
 		{Key: SettingKeyAutoRankMinSamples, Value: "3"},    // 样本 ≥3 条才按得分参与排序
 		{Key: SettingKeyAutoRankChannelFactorEnabled, Value: "true"}, // 默认启用渠道级聚合健康修正
 		{Key: SettingKeyAutoRankChannelMinSamples, Value: "8"},       // 渠道聚合样本 ≥8 条才评估

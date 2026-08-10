@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"math"
+	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -101,31 +102,39 @@ func TestAutoRankLessTiers(t *testing.T) {
 	}
 }
 
-func TestFindUnderSampled(t *testing.T) {
+func TestPickUnderSampled(t *testing.T) {
 	AutoRankReset()
-	// c1 样本充足；c2 无样本（最需探索）；c3 样本不足
+	// c1 样本充足；c2/c3 无样本（最需探索）
 	for i := 0; i < 5; i++ {
 		RecordAutoSample(1, "gpt-4o", true, 100)
 	}
-	RecordAutoSample(2, "gpt-4o", true, 100)
-	RecordAutoSample(3, "gpt-4o", true, 100)
-	RecordAutoSample(3, "gpt-4o", true, 100)
 
 	items := []model.GroupItem{
 		{ChannelID: 1, ModelName: "gpt-4o"},
 		{ChannelID: 2, ModelName: "gpt-4o"},
 		{ChannelID: 3, ModelName: "gpt-4o"},
 	}
-	if idx := findUnderSampled(items, 3); idx != 1 {
-		t.Fatalf("expected under-sampled index 1, got %d", idx)
+	// 确定性随机源：多个欠采样候选应被随机轮换，而非固定返回第一个。
+	seen := map[int]bool{}
+	for seed := uint64(0); seed < 50; seed++ {
+		rng := rand.New(rand.NewPCG(seed, seed*7+1))
+		idx := pickUnderSampled(items, 3, rng.IntN)
+		if idx != 1 && idx != 2 {
+			t.Fatalf("expected under-sampled index 1 or 2, got %d", idx)
+		}
+		seen[idx] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("expected both under-sampled candidates to be picked across seeds, got %v", seen)
 	}
 
+	// 全部充分采样 → -1
 	AutoRankReset()
 	for i := 0; i < 5; i++ {
 		RecordAutoSample(4, "gpt-4o", true, 100)
 	}
 	items2 := []model.GroupItem{{ChannelID: 4, ModelName: "gpt-4o"}}
-	if idx := findUnderSampled(items2, 3); idx != -1 {
+	if idx := pickUnderSampled(items2, 3, rand.IntN); idx != -1 {
 		t.Fatalf("expected no under-sampled candidate, got %d", idx)
 	}
 }
