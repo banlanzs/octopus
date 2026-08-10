@@ -318,3 +318,64 @@ func TestChatTransformResponseSuccessNoError(t *testing.T) {
 		t.Fatalf("expected parsed response, got: %+v", internalResp)
 	}
 }
+
+// TestDeepSeekOpenAIRoundTripReplayKeepsReasoningContent verifies that when an
+// OpenAI-compatible client replays a DeepSeek thinking-mode assistant message
+// already carrying content[].thinking blocks (OpenAI round-trip path), the
+// top-level reasoning_content field is still backfilled — upstreams that
+// require reasoning_content (DeepSeek V3-compatible layers / some relays)
+// otherwise reject the follow-up with
+// "The reasoning_content in the thinking mode must be passed back to the API".
+func TestDeepSeekOpenAIRoundTripReplayKeepsReasoningContent(t *testing.T) {
+	body := `{
+		"model": "deepseek-v4-flash",
+		"messages": [
+			{"role": "user", "content": "hello"},
+			{"role": "assistant", "content": [
+				{"type": "thinking", "thinking": "let me think", "signature": "sig-abc"},
+				{"type": "text", "text": "hi"}
+			]}
+		]
+	}`
+
+	inbound := &inboundOpenai.ChatInbound{}
+	internalReq, err := inbound.TransformRequest(context.Background(), []byte(body))
+	if err != nil {
+		t.Fatalf("inbound failed: %v", err)
+	}
+
+	outbound := &ChatOutbound{}
+	httpReq, err := outbound.TransformRequest(context.Background(), internalReq, "https://api.deepseek.com/v1", "test-key")
+	if err != nil {
+		t.Fatalf("outbound failed: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(readRequestBody(t, httpReq.Body), &payload); err != nil {
+		t.Fatalf("failed to parse outgoing request: %v", err)
+	}
+	msgs := payload["messages"].([]any)
+	assistant := msgs[len(msgs)-1].(map[string]any)
+
+	if rc, ok := assistant["reasoning_content"].(string); !ok || rc != "let me think" {
+		t.Fatalf("expected top-level reasoning_content backfilled from content[].thinking, got: %v", assistant["reasoning_content"])
+	}
+
+	content, ok := assistant["content"].([]any)
+	if !ok {
+		t.Fatalf("expected content array, got: %v", assistant)
+	}
+	sawThinking := false
+	for _, c := range content {
+		if block, ok := c.(map[string]any); ok && block["type"] == "thinking" {
+			sawThinking = true
+			if block["thinking"] != "let me think" || block["signature"] != "sig-abc" {
+				t.Fatalf("thinking block mismatch: %v", block)
+			}
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("content[].thinking block lost, assistant message: %v", assistant)
+	}
+}
+

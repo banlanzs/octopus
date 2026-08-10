@@ -412,19 +412,58 @@ func materializeDeepSeekThinkingBlocks(request *model.InternalLLMRequest) {
 			continue
 		}
 		thinkingParts := deepSeekThinkingParts(msg)
-		if len(thinkingParts) == 0 {
-			// 消息无 reasoning 信息：保留现状。若客户端已按契约回传
-			// content[].thinking 块（OpenAI round-trip 路径），字段保留即可。
-			continue
+		if len(thinkingParts) > 0 {
+			// 从 ReasoningBlocks / ReasoningContent 重组 content[].thinking 块。
+			// 消息本身已带 content[].thinking 块（OpenAI round-trip 路径）时
+			// thinkingParts 为空，保留原 MultipleContent 即可。
+			parts := append(thinkingParts, deepSeekTextParts(msg)...)
+			msg.Content = model.MessageContent{MultipleContent: parts}
 		}
-		parts := append(thinkingParts, deepSeekTextParts(msg)...)
-		msg.Content = model.MessageContent{MultipleContent: parts}
-		// thinking 以块形式回传后，不再输出顶层 reasoning_content，避免重复/歧义。
-		msg.ReasoningContent = nil
+		// 同时保留顶层 reasoning_content：DeepSeek 官方（V3 兼容层）与部分
+		// 中转站（如 Console Go）要求 thinking 以 reasoning_content 顶层字段
+		// 回传，而 content[].thinking 块满足 V4 / 另一些中转站。两者内容一致、
+		// 同时输出，上游按需读取（OpenAI 兼容上游对额外字段通常忽略）。
+		ensureReasoningContent(msg, thinkingParts)
+		// reasoning_signature 仅随块携带（DeepSeek 请求 schema 无顶层字段）。
 		msg.Reasoning = nil
 		msg.ReasoningSignature = nil
 		msg.ReasoningBlocks = nil
 	}
+}
+
+// ensureReasoningContent 确保顶层 reasoning_content 与 thinking 块内容一致：
+// 若消息已有顶层字段则保留；否则从 thinking 块（thinkingParts，或消息已
+// 携带的 content[].thinking 块）提取文本回填。
+func ensureReasoningContent(msg *model.Message, parts []model.MessageContentPart) {
+	if msg.ReasoningContent != nil && *msg.ReasoningContent != "" {
+		return
+	}
+	if len(parts) == 0 {
+		for _, p := range msg.Content.MultipleContent {
+			if p.Type == "thinking" {
+				parts = append(parts, p)
+			}
+		}
+	}
+	if text := joinThinkingText(parts); text != "" {
+		msg.ReasoningContent = &text
+	}
+}
+
+// joinThinkingText 拼接块数组中的 thinking 文本（多块按顺序以换行连接），
+// 用于回填顶层 reasoning_content 字段。
+func joinThinkingText(parts []model.MessageContentPart) string {
+	var sb strings.Builder
+	for _, p := range parts {
+		if p.Type != "thinking" || p.Thinking == nil || *p.Thinking == "" {
+			continue
+		}
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(*p.Thinking)
+	}
+	return sb.String()
 }
 
 // deepSeekThinkingParts 从消息的 ReasoningBlocks / ReasoningContent 构建

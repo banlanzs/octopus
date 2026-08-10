@@ -486,3 +486,80 @@ func TestDeepSeekArrayContentStreamSurvivesToAnthropic(t *testing.T) {
 		t.Fatalf("array text block lost in stream conversion, got:\n%s", text)
 	}
 }
+
+// TestDeepSeekThinkingReplayKeepsTopLevelReasoningContent verifies that
+// DeepSeek thinking replay emits BOTH the content[].thinking block (required
+// by DeepSeek V4 / some relays) and the top-level reasoning_content field
+// (required by DeepSeek V3-compatible layers / other relays such as Console
+// Go). Regression: the top-level field was cleared, so upstreams that require
+// reasoning_content rejected the follow-up with
+// "The reasoning_content in the thinking mode must be passed back to the API".
+func TestDeepSeekThinkingReplayKeepsTopLevelReasoningContent(t *testing.T) {
+	anthropicBody := `{
+		"model": "deepseek-v4-flash",
+		"max_tokens": 1024,
+		"thinking": {"type": "enabled", "budget_tokens": 2048},
+		"messages": [
+			{"role": "user", "content": "hello"},
+			{"role": "assistant", "content": [
+				{"type": "thinking", "thinking": "let me think", "signature": "sig-123"},
+				{"type": "text", "text": "hello to you"}
+			]}
+		]
+	}`
+
+	inbound := &inboundAnthropic.MessagesInbound{}
+	internalReq, err := inbound.TransformRequest(context.Background(), []byte(anthropicBody))
+	if err != nil {
+		t.Fatalf("anthropic inbound failed: %v", err)
+	}
+
+	outbound := &ChatOutbound{}
+	httpReq, err := outbound.TransformRequest(context.Background(), internalReq, "https://api.deepseek.com/v1", "test-key")
+	if err != nil {
+		t.Fatalf("openai outbound failed: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(readRequestBody(t, httpReq.Body), &payload); err != nil {
+		t.Fatalf("failed to parse outgoing request: %v", err)
+	}
+
+	msgs, ok := payload["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages field missing")
+	}
+	assistant := msgs[len(msgs)-1].(map[string]any)
+
+	// 顶层 reasoning_content 必须存在（V3 兼容上游 / Console Go 要求）。
+	if rc, ok := assistant["reasoning_content"].(string); !ok || rc != "let me think" {
+		t.Fatalf("expected top-level reasoning_content='let me think', got: %v", assistant["reasoning_content"])
+	}
+
+	// content[].thinking 块仍须存在（DeepSeek V4 / 部分中转站要求）。
+	content, ok := assistant["content"].([]any)
+	if !ok {
+		t.Fatalf("expected content array with thinking block, got: %v", assistant)
+	}
+	sawThinking := false
+	for _, c := range content {
+		block, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if block["type"] == "thinking" {
+			sawThinking = true
+			if block["thinking"] != "let me think" || block["signature"] != "sig-123" {
+				t.Fatalf("thinking block content/signature mismatch: %v", block)
+			}
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("content[].thinking block lost, assistant message: %v", assistant)
+	}
+
+	// 顶层不应出现 reasoning_signature（DeepSeek 请求 schema 无此字段）。
+	if _, exists := assistant["reasoning_signature"]; exists {
+		t.Fatalf("unexpected top-level reasoning_signature: %v", assistant["reasoning_signature"])
+	}
+}
