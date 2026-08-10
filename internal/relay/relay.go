@@ -1323,14 +1323,16 @@ func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, r
 
 	// Create StreamProcessor
 	processor := stream.NewStreamProcessor(stream.StreamConfig{
-		Source:            stream.NewRawSource(response.Body, 32*1024),
-		Transform:         nil, // Passthrough: no transformation
-		Writer:            ra.getStreamWriter(),
-		Context:           ctx,
-		FirstTokenTimeout: firstTokenTimeout,
-		HeartbeatInterval: streamHeartbeatInterval(),
-		BufferRawStream:   true,
-		TerminalEvents:    cfg.TerminalEvents,
+		Source:                stream.NewRawSource(response.Body, 32*1024),
+		Transform:             nil, // Passthrough: no transformation
+		Writer:                ra.getStreamWriter(),
+		Context:               ctx,
+		FirstTokenTimeout:     firstTokenTimeout,
+		HeartbeatInterval:     streamHeartbeatInterval(),
+		BufferRawStream:       true,
+		TerminalEvents:        cfg.TerminalEvents,
+		RequireTerminalEvent:  cfg.RequireTerminalEvent,
+		IncompleteStreamEvent: cfg.IncompleteStreamEvent,
 		OnFirstToken: func() {
 			ra.metrics.SetFirstTokenTime(time.Now())
 			ra.stopFirstTokenTimer()
@@ -1532,4 +1534,3 @@ func (ra *relayAttempt) collectResponse() {
 	}
 	ra.metrics.SetInternalResponse(internalResponse, actualModel)
 }
-

@@ -2075,6 +2075,9 @@ func (o *MessageOutbound) PassthroughConfig() model.PassthroughConfig {
 			"message_stop": {},
 			"error":        {},
 		},
+		RequireTerminalEvent: true,
+		IncompleteStreamEvent: []byte("event: error\n" +
+			"data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Upstream stream ended before message_stop\"}}\n\n"),
 		CollectMetrics: true, // Anthropic requires full response aggregation for metrics
 	}
 }

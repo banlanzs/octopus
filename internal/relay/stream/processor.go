@@ -20,6 +20,10 @@ import (
 // Relay should fail over to another channel.
 var ErrEmptyUpstreamStream = errors.New("upstream stream ended without forwarding any payload")
 
+// ErrIncompleteUpstreamStream marks streams that ended after forwarding data but
+// before the protocol's required terminal event.
+var ErrIncompleteUpstreamStream = errors.New("upstream stream ended before terminal event")
+
 // StreamSource abstracts different event sources (SSE, WebSocket, raw bytes).
 type StreamSource interface {
 	// ReadEvent blocks until the next event is available or returns an error.
@@ -63,6 +67,10 @@ type StreamConfig struct {
 	// Passthrough-specific
 	BufferRawStream bool                // Enable raw stream buffering for metrics
 	TerminalEvents  map[string]struct{} // Protocol terminal events for early completion
+	// RequireTerminalEvent makes a clean EOF without a configured terminal event fail.
+	RequireTerminalEvent bool
+	// IncompleteStreamEvent notifies the client that a partially written stream is invalid.
+	IncompleteStreamEvent []byte
 }
 
 // StreamProcessor unifies all stream handling logic.
@@ -270,6 +278,15 @@ func (p *StreamProcessor) handleFirstTokenTimeout() error {
 func (p *StreamProcessor) finalize() error {
 	if !p.payloadWritten {
 		return ErrEmptyUpstreamStream
+	}
+	if p.config.RequireTerminalEvent && !p.streamReachedTerminal() {
+		if len(p.config.IncompleteStreamEvent) > 0 {
+			if _, err := p.config.Writer.Write(p.config.IncompleteStreamEvent); err != nil {
+				return fmt.Errorf("%w: failed to write incomplete stream event: %v", ErrIncompleteUpstreamStream, err)
+			}
+			p.config.Writer.Flush()
+		}
+		return ErrIncompleteUpstreamStream
 	}
 
 	log.Debugf("stream end (payload_written=%t)", p.payloadWritten)

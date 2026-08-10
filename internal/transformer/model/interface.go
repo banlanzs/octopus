@@ -92,6 +92,14 @@ type PassthroughConfig struct {
 	// for OpenAI Responses), the relay can treat client disconnection as success rather than failure.
 	TerminalEvents map[string]struct{}
 
+	// RequireTerminalEvent rejects a clean upstream EOF unless one of TerminalEvents
+	// was observed. This prevents clients from accepting and replaying partial state.
+	RequireTerminalEvent bool
+
+	// IncompleteStreamEvent is written to the client before returning an incomplete
+	// stream error. It must use the inbound protocol's wire format.
+	IncompleteStreamEvent []byte
+
 	// CollectMetrics defines whether to call collectResponse() after passthrough stream ends.
 	// Set to true for protocols that require full response aggregation for cost/token tracking
 	// (Anthropic), false for protocols with different metrics semantics (OpenAI Responses).

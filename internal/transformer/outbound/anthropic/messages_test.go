@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -47,6 +48,45 @@ func TestTransformRequestRawRewritesModel(t *testing.T) {
 	}
 	if got := payload["custom_flag"]; got != true {
 		t.Fatalf("expected custom fields to survive rewrite, got %#v", got)
+	}
+}
+
+func TestTransformRequestRawPreservesThinkingToolHistory(t *testing.T) {
+	outbound := &MessageOutbound{}
+	rawBody := []byte(`{"model":"deepseek-alias","max_tokens":128,"thinking":{"type":"enabled","budget_tokens":4096},"messages":[{"role":"user","content":"inspect"},{"role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"sig-plan"},{"type":"text","text":"I will inspect it."},{"type":"tool_use","id":"call-1","name":"read_file","input":{"path":"main.go"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"package main"}]}]}`)
+
+	req, err := outbound.TransformRequestRaw(
+		context.Background(),
+		rawBody,
+		"deepseek-ai/DeepSeek-V4-Flash-0731",
+		"https://example.com/v1",
+		"test-key",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("TransformRequestRaw() error = %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal rewritten body error = %v", err)
+	}
+	var modelName string
+	if err := json.Unmarshal(payload["model"], &modelName); err != nil {
+		t.Fatalf("decode rewritten model error = %v", err)
+	}
+	if modelName != "deepseek-ai/DeepSeek-V4-Flash-0731" {
+		t.Fatalf("expected rewritten model, got %q", modelName)
+	}
+	if !bytes.Contains(payload["thinking"], []byte(`"type":"enabled"`)) ||
+		!bytes.Contains(payload["messages"], []byte(`"type":"thinking"`)) ||
+		!bytes.Contains(payload["messages"], []byte(`"signature":"sig-plan"`)) ||
+		!bytes.Contains(payload["messages"], []byte(`"type":"tool_result"`)) {
+		t.Fatalf("thinking/tool history was not preserved: %s", payload["messages"])
 	}
 }
 
@@ -789,4 +829,3 @@ func TestTransformRequestPreservesThinkingBlocksForDeepSeek(t *testing.T) {
 		t.Fatalf("thinking block lost in Anthropic→Anthropic transform: %s", body)
 	}
 }
-

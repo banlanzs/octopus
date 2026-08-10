@@ -19,6 +19,7 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	stream "github.com/bestruirui/octopus/internal/relay/stream"
 	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
@@ -88,6 +89,56 @@ func TestHandleStreamResponsePassthroughAnthropicPreservesRawSSE(t *testing.T) {
 
 	if got := recorder.Body.String(); got != rawSSE {
 		t.Fatalf("expected raw SSE to be preserved exactly, got %q want %q", got, rawSSE)
+	}
+}
+
+func TestHandleStreamResponsePassthroughAnthropicRejectsIncompleteSSE(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rawSSE := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"deepseek-v4","content":[]}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"partial"}}`,
+		"",
+	}, "\n")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	internalReq := &transformerModel.InternalLLMRequest{
+		Model:        "deepseek-v4",
+		Stream:       boolPtr(true),
+		RawAPIFormat: transformerModel.APIFormatAnthropicMessage,
+	}
+	req := &relayRequest{
+		c:               c,
+		inAdapter:       inbound.Get(inbound.InboundTypeAnthropic),
+		internalRequest: internalReq,
+		metrics:         NewRelayMetrics(1, internalReq.Model, nil, internalReq),
+		apiKeyID:        1,
+		requestModel:    internalReq.Model,
+	}
+	ra := &relayAttempt{
+		relayRequest: req,
+		outAdapter:   outbound.Get(outbound.OutboundTypeAnthropic),
+	}
+
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(bytes.NewReader([]byte(rawSSE))),
+	}
+
+	pt := ra.outAdapter.(transformerModel.PassthroughCapable)
+	err := ra.handleStreamResponsePassthroughV2(context.Background(), response, pt.PassthroughConfig())
+	if !errors.Is(err, stream.ErrIncompleteUpstreamStream) {
+		t.Fatalf("expected incomplete stream error, got %v", err)
+	}
+	if !strings.Contains(recorder.Body.String(), "event: error") ||
+		!strings.Contains(recorder.Body.String(), "before message_stop") {
+		t.Fatalf("expected explicit Anthropic error event, got %q", recorder.Body.String())
 	}
 }
 

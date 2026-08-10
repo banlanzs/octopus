@@ -359,6 +359,38 @@ data: {"type":"message_stop"}
 	}
 }
 
+func TestStreamProcessor_EOFBeforeRequiredTerminalEventFails(t *testing.T) {
+	sseData := `event: message_start
+data: {"type":"message_start"}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"partial"}}
+
+`
+	source := newMockStreamSource([][]byte{[]byte(sseData)})
+	writer := newMockStreamWriter()
+
+	processor := NewStreamProcessor(StreamConfig{
+		Source:               source,
+		Writer:               writer,
+		Context:              context.Background(),
+		BufferRawStream:      true,
+		RequireTerminalEvent: true,
+		TerminalEvents: map[string]struct{}{
+			"message_stop": {},
+			"error":        {},
+		},
+		IncompleteStreamEvent: []byte("event: error\ndata: {\"type\":\"error\"}\n\n"),
+	})
+
+	if err := processor.Run(); !errors.Is(err, ErrIncompleteUpstreamStream) {
+		t.Fatalf("expected ErrIncompleteUpstreamStream, got %v", err)
+	}
+	if got := writer.buffer.String(); !strings.HasSuffix(got, "event: error\ndata: {\"type\":\"error\"}\n\n") {
+		t.Fatalf("expected an explicit downstream error event, got %q", got)
+	}
+}
+
 func TestRawSource(t *testing.T) {
 	data := []byte("raw chunk data")
 	reader := io.NopCloser(bytes.NewReader(data))
