@@ -487,6 +487,48 @@ func TestDeepSeekArrayContentStreamSurvivesToAnthropic(t *testing.T) {
 	}
 }
 
+// Some DeepSeek relays return a complete chat.completion message inside one
+// SSE event. The stream bridge must project message.content/tool_calls just as
+// it does delta content, or Claude Code receives message_stop without any
+// content block and reports "Content block not found".
+func TestDeepSeekCompleteMessageStreamSurvivesToAnthropic(t *testing.T) {
+	chunks := []string{
+		`{"id":"chatcmpl-83e7cdccbd63422a8d16c09aadc33f89","choices":[{"index":0,"message":{"role":"assistant","content":"\n\n","tool_calls":[{"id":"call_3e9037e6d2b24abbb379ddab","type":"function","function":{"name":"Edit","arguments":"{\"file_path\":\"model.ts\"}"},"index":0}]},"finish_reason":"tool_calls"},{"index":1,"message":{}}],"object":"chat.completion","created":0,"model":"accounts/fireworks/models/deepseek-v4-flash-0731","usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`,
+		`[DONE]`,
+	}
+
+	outbound := &ChatOutbound{}
+	inbound := &inboundAnthropic.MessagesInbound{}
+	var allSSE strings.Builder
+	for _, chunk := range chunks {
+		events, err := outbound.TransformStreamEvent(context.Background(), []byte(chunk))
+		if err != nil {
+			t.Fatalf("outbound failed for chunk %s: %v", chunk, err)
+		}
+		sse, err := inbound.TransformStreamEvents(context.Background(), events)
+		if err != nil {
+			t.Fatalf("inbound failed for chunk %s: %v", chunk, err)
+		}
+		allSSE.Write(sse)
+	}
+
+	text := allSSE.String()
+	for _, want := range []string{
+		"event:message_start",
+		`"type":"text"`,
+		`"type":"tool_use"`,
+		`"id":"call_3e9037e6d2b24abbb379ddab"`,
+		`"name":"Edit"`,
+		`"partial_json":"{\"file_path\":\"model.ts\"}"`,
+		`"stop_reason":"tool_use"`,
+		"event:message_stop",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in converted SSE, got:\n%s", want, text)
+		}
+	}
+}
+
 // TestDeepSeekThinkingReplayKeepsTopLevelReasoningContent verifies that
 // DeepSeek thinking replay emits BOTH the content[].thinking block (required
 // by DeepSeek V4 / some relays) and the top-level reasoning_content field
@@ -715,4 +757,3 @@ func TestDeepSeekThinkingToolRoundTripNoDuplicate(t *testing.T) {
 		t.Fatalf("top-level reasoning_content missing: %v", assistant)
 	}
 }
-

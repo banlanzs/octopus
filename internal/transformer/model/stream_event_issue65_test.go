@@ -86,6 +86,58 @@ func TestStreamEventsFromInternalResponseUsesChoiceIndexForToolCalls(t *testing.
 	}
 }
 
+// Some OpenAI-compatible DeepSeek relays wrap a complete chat.completion
+// object in an SSE data event instead of emitting chat.completion.chunk deltas.
+// Treat choices[].message as a complete delta so an Anthropic client still gets
+// content blocks; otherwise only finish_reason survives and Claude Code reports
+// "Content block not found".
+func TestStreamEventsFromInternalResponseProjectsCompleteMessage(t *testing.T) {
+	content := "\n\n"
+	finishReason := "tool_calls"
+	resp := &InternalLLMResponse{
+		ID:     "chatcmpl-83e7cdccbd63422a8d16c09aadc33f89",
+		Object: "chat.completion",
+		Model:  "accounts/fireworks/models/deepseek-v4-flash-0731",
+		Choices: []Choice{{
+			Index: 0,
+			Message: &Message{
+				Role:    "assistant",
+				Content: MessageContent{Content: &content},
+				ToolCalls: []ToolCall{{
+					Index: 0,
+					ID:    "call_3e9037e6d2b24abbb379ddab",
+					Type:  "function",
+					Function: FunctionCall{
+						Name:      "Edit",
+						Arguments: `{"file_path":"model.ts"}`,
+					},
+				}},
+			},
+			FinishReason: &finishReason,
+		}},
+	}
+
+	events := StreamEventsFromInternalResponse(resp)
+	var sawStart, sawText, sawTool, sawStop bool
+	for _, event := range events {
+		switch event.Kind {
+		case StreamEventKindMessageStart:
+			sawStart = event.Role == "assistant"
+		case StreamEventKindTextDelta:
+			sawText = event.Delta != nil && event.Delta.Text == "\n\n"
+		case StreamEventKindToolCallDelta:
+			sawTool = event.ToolCall != nil &&
+				event.ToolCall.ID == "call_3e9037e6d2b24abbb379ddab" &&
+				event.ToolCall.Function.Name == "Edit"
+		case StreamEventKindMessageStop:
+			sawStop = event.StopReason == FinishReasonToolCalls
+		}
+	}
+	if !sawStart || !sawText || !sawTool || !sawStop {
+		t.Fatalf("complete message was not projected into stream content events: %+v", events)
+	}
+}
+
 func TestStreamAggregatorKeepsNonContiguousChoiceIndices(t *testing.T) {
 	text := "hi"
 	var agg StreamAggregator
@@ -173,4 +225,3 @@ func TestStreamEventsFromInternalResponseProjectsArrayContentBlocks(t *testing.T
 		t.Fatalf("signature emitted twice (thinking_delta already carries it): %+v", events)
 	}
 }
-

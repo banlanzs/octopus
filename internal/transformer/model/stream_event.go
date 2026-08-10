@@ -75,8 +75,11 @@ func StreamEventsFromInternalResponse(response *InternalLLMResponse) []StreamEve
 	}
 	events := make([]StreamEvent, 0, len(response.Choices)+1)
 	for _, choice := range response.Choices {
-		if choice.Delta != nil {
-			delta := choice.Delta
+		delta := choice.Delta
+		if delta == nil {
+			delta = choice.Message
+		}
+		if delta != nil {
 			if delta.Role != "" {
 				events = append(events, StreamEvent{Kind: StreamEventKindMessageStart, ID: response.ID, Model: response.Model, Index: choice.Index, Role: delta.Role})
 			}
