@@ -2,6 +2,7 @@ package helper
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -28,6 +29,37 @@ func LLMPriceAddToDB(modelNames []string, ctx context.Context) error {
 		return op.LLMBatchCreate(newLLMInfos, ctx)
 	}
 	return nil
+}
+
+// EnsureChannelModelPrices 为渠道内尚未配置价格的模型写入全局默认价。
+// 已配置过（含用户改过价）的 (channel, model) 不覆盖。
+func EnsureChannelModelPrices(channelID int, modelNames []string, ctx context.Context) error {
+	if channelID <= 0 || len(modelNames) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(modelNames))
+	seen := make(map[string]struct{}, len(modelNames))
+	prices := make([]model.LLMPrice, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		modelName = strings.ToLower(strings.TrimSpace(modelName))
+		if modelName == "" {
+			continue
+		}
+		if _, ok := seen[modelName]; ok {
+			continue
+		}
+		seen[modelName] = struct{}{}
+		names = append(names, modelName)
+		modelPrice := price.GetLLMPrice(modelName)
+		if modelPrice == nil {
+			modelPrice = &model.LLMPrice{}
+		}
+		prices = append(prices, *modelPrice)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return op.ChannelModelPriceSeedDefaults(channelID, names, prices, ctx)
 }
 
 func LLMPriceDeleteFromDBWithNoPrice(modelNames []string, ctx context.Context) error {

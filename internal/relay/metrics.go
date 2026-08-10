@@ -98,7 +98,7 @@ func (m *RelayMetrics) SetWSRecovery(recovery model.RelayLogWSRecovery) {
 	m.WSRecovery = wsRecoveryPtr(recovery)
 }
 
-func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMResponse, actualModel string) {
+func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMResponse, actualModel string, channelID int) {
 	m.InternalResponse = resp
 	m.ActualModel = actualModel
 
@@ -119,7 +119,7 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 		m.Stats.OutputToken = usage.CompletionTokens
 		inputReported = usage.EffectiveInputTokens() > 0
 
-		if modelPrice := resolveModelPrice(actualModel); modelPrice != nil {
+		if modelPrice := resolveModelPrice(channelID, actualModel); modelPrice != nil {
 			m.Stats.InputCost = (float64(cacheReadTokens)*modelPrice.CacheRead +
 				float64(cacheWriteTokens)*modelPrice.CacheWrite +
 				float64(nonCachedInput)*modelPrice.Input) * 1e-6
@@ -134,7 +134,7 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 		estimated := int64(*m.TransportInputTokens)
 		m.Stats.InputToken = estimated
 		m.BillInputTokens = intPtr(int(estimated))
-		if modelPrice := resolveModelPrice(actualModel); modelPrice != nil {
+		if modelPrice := resolveModelPrice(channelID, actualModel); modelPrice != nil {
 			m.Stats.InputCost = float64(estimated) * modelPrice.Input * 1e-6
 		}
 	}
@@ -320,9 +320,9 @@ func intPtr(value int) *int {
 	return &value
 }
 
-// resolveModelPrice returns the global price configured for the actual model.
-func resolveModelPrice(actualModel string) *model.LLMPrice {
-	return price.GetLLMPrice(actualModel)
+// resolveModelPrice 返回实际计费价格：渠道内模型价优先，未配置时回退全局价。
+func resolveModelPrice(channelID int, actualModel string) *model.LLMPrice {
+	return price.GetChannelModelPrice(channelID, actualModel)
 }
 
 func wsModePtr(value model.RelayLogWSMode) *model.RelayLogWSMode {

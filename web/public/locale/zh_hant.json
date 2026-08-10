@@ -59,8 +59,7 @@
             "createdDesc": "時間倒序",
             "balanceDesc": "餘額高到低",
             "balanceAsc": "餘額低到高",
-            "logRefresh": {
-            },
+            "logRefresh": {},
             "logFilter": {
                 "title": "日誌篩選",
                 "clearAll": "清除篩選",
@@ -760,7 +759,10 @@
             "updated": "模型價格已更新",
             "updateFailed": "更新失敗",
             "deleted": "模型已刪除",
-            "deleteFailed": "刪除失敗"
+            "deleteFailed": "刪除失敗",
+            "channelUpdated": "渠道模型價格已更新",
+            "restored": "已恢復全域預設價",
+            "restoreFailed": "恢復失敗"
         },
         "card": {
             "inputCache": "輸入/快取",
@@ -776,8 +778,15 @@
             "output": "輸出",
             "cacheRead": "快取讀取",
             "cacheWrite": "快取寫入",
-            "save": "儲存"
-        }
+            "save": "儲存",
+            "confirmRestore": "恢復"
+        },
+        "channelGroup": "渠道：{name}",
+        "channel": "渠道",
+        "models": "模型",
+        "restoreDefault": "恢復全域預設價",
+        "restoreDefaultHint": "回退到全域官方價格",
+        "empty": "暫無渠道模型"
     },
     "log": {
         "list": {

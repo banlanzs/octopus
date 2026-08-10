@@ -59,8 +59,7 @@
             "createdDesc": "Time Desc",
             "balanceDesc": "Balance High to Low",
             "balanceAsc": "Balance Low to High",
-            "logRefresh": {
-            },
+            "logRefresh": {},
             "logFilter": {
                 "title": "Log filters",
                 "clearAll": "Clear filters",
@@ -299,7 +298,7 @@
                 "placeholder": "8"
             },
             "channelMinModels": {
-                "label": "Min failing models (\u22652)",
+                "label": "Min failing models (≥2)",
                 "placeholder": "2"
             },
             "channelDegradeRate": {
@@ -760,7 +759,10 @@
             "updated": "Model price updated",
             "updateFailed": "Update failed",
             "deleted": "Model deleted",
-            "deleteFailed": "Delete failed"
+            "deleteFailed": "Delete failed",
+            "channelUpdated": "Channel model price updated",
+            "restored": "Reverted to global default",
+            "restoreFailed": "Restore failed"
         },
         "card": {
             "inputCache": "Input/Cache",
@@ -776,8 +778,15 @@
             "output": "Output",
             "cacheRead": "Cache Read",
             "cacheWrite": "Cache Write",
-            "save": "Save"
-        }
+            "save": "Save",
+            "confirmRestore": "Restore"
+        },
+        "channelGroup": "Channel: {name}",
+        "channel": "Channel",
+        "models": "Models",
+        "restoreDefault": "Restore Global Default",
+        "restoreDefaultHint": "Revert to the global official price",
+        "empty": "No channel models yet"
     },
     "log": {
         "list": {

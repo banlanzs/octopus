@@ -12,6 +12,14 @@ type LLMInfo struct {
 	LLMPrice
 }
 
+// ChannelModelPrice 渠道内模型价格。主键 = (channel_id, model_name)。
+// 查询优先级高于全局 LLMInfo，未配置时回退到全局官方价。
+type ChannelModelPrice struct {
+	ChannelID int `json:"channel_id" gorm:"primaryKey;not null"`
+	ModelName string `json:"model_name" gorm:"primaryKey;not null;size:128"`
+	LLMPrice
+}
+
 type LLMChannel struct {
 	Name            string `json:"name"`
 	Enabled         bool   `json:"enabled"`
@@ -24,6 +32,12 @@ type LLMChannel struct {
 	SiteName        string `json:"site_name,omitempty"`
 	SiteAccountName string `json:"site_account_name,omitempty"`
 	EndpointType    string `json:"endpoint_type,omitempty"`
+	// HasChannelPrice 该 (渠道, 模型) 是否配置了专属渠道价（true 表示计费不走全局兜底）。
+	// 由 model handler 在 listLLMByChannel 时附加，供前端区分"是否已单独定价"。
+	HasChannelPrice bool `json:"has_channel_price"`
+	// Price 该 (渠道, 模型) 的计费价格（渠道价优先，未配置时为全局兜底价）。
+	// 由 model handler 在 listLLMByChannel 时附加，供管理面板价格页直接渲染。
+	Price *LLMPrice `json:"price,omitempty"`
 	// AutoRank 该 (渠道, 模型) 的自动排序性能统计与熔断状态摘要。
 	// 仅在组内 Auto 模式或存在熔断/降级信号时由 handler 附加，用于
 	// 管理面板解释"自动排序为什么把流量分到这里/那里"。

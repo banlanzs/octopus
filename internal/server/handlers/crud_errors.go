@@ -44,4 +44,7 @@ const (
 	codeModelCreateFailed      = "model.create_failed"
 	codeModelUpdateFailed      = "model.update_failed"
 	codeModelDeleteFailed      = "model.delete_failed"
+
+	codeChannelModelPriceUpdateFailed = "channel_model.price_update_failed"
+	codeChannelModelPriceDeleteFailed = "channel_model.price_delete_failed"
 )

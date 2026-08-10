@@ -189,7 +189,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 			// ====== 成功 ======
 			metrics.ActualModel = item.ModelName
 			if usage != nil {
-				metrics.SetUsageFromImages(item.ModelName, *usage)
+				metrics.SetUsageFromImages(channel.ID, item.ModelName, *usage)
 			}
 			metrics.ResponseContent = buildImagesResponseContentForLog(stream, upstreamCT, usage)
 
@@ -272,12 +272,12 @@ func (m *imagesRelayMetrics) SetFirstTokenTime(t time.Time) {
 	}
 }
 
-func (m *imagesRelayMetrics) SetUsageFromImages(actualModel string, u imagesUsage) {
+func (m *imagesRelayMetrics) SetUsageFromImages(channelID int, actualModel string, u imagesUsage) {
 	m.ActualModel = actualModel
 	m.Stats.InputToken = int64(u.InputTokens)
 	m.Stats.OutputToken = int64(u.OutputTokens)
 
-	modelPrice := price.GetLLMPrice(actualModel)
+	modelPrice := price.GetChannelModelPrice(channelID, actualModel)
 	if modelPrice == nil {
 		return
 	}

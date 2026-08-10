@@ -98,3 +98,15 @@ func GetLLMPrice(modelName string) *model.LLMPrice {
 	}
 	return &price
 }
+
+// GetChannelModelPrice 取渠道内模型价格（渠道价优先），未配置时回退到全局价。
+// channelID <= 0 时直接走全局价。
+func GetChannelModelPrice(channelID int, modelName string) *model.LLMPrice {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	if channelID > 0 {
+		if price, err := op.ChannelModelPriceGet(channelID, modelName); err == nil {
+			return &price
+		}
+	}
+	return GetLLMPrice(modelName)
+}

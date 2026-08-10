@@ -81,6 +81,7 @@ func InitDB(dbType, dsn string, debug bool) error {
 		&model.GroupItem{},
 		&model.GroupPreset{},
 		&model.LLMInfo{},
+		&model.ChannelModelPrice{},
 		&model.APIKey{},
 		&model.Setting{},
 		&model.StatsTotal{},

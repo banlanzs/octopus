@@ -447,5 +447,9 @@ func (ra *relayAttempt) applyWSPassthroughStats(stats *wsPassthroughStats) {
 		Usage:                   stats.Usage,
 		RawResponsesOutputItems: stats.RawOutput,
 	}
-	ra.metrics.SetInternalResponse(resp, modelName)
+	channelID := 0
+	if ra.channel != nil {
+		channelID = ra.channel.ID
+	}
+	ra.metrics.SetInternalResponse(resp, modelName, channelID)
 }

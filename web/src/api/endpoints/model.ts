@@ -35,10 +35,31 @@ export interface LLMChannel {
     site_account_name?: string;
     endpoint_type?: string;
     /**
+     * 该 (渠道, 模型) 是否配置了专属渠道价（true 表示计费不走全局兜底）。
+     */
+    has_channel_price?: boolean;
+    /**
+     * 该 (渠道, 模型) 的计费价格（渠道价优先，未配置时为全局兜底价）。
+     * 由后端在 /api/v1/model/channel 附带，供价格页渲染。
+     */
+    price?: LLMPrice;
+    /**
      * 自动排序健康度摘要（AutoRank 被动统计 + 渠道级熔断状态）。
      * 有采样或存在熔断/降级信号时由后端附带，用于解释自动排序的流量分配。
      */
     auto_rank?: AutoRankHealth;
+}
+
+/**
+ * 渠道内模型价格更新请求体
+ */
+export interface ChannelModelPricePayload {
+    channel_id: number;
+    model_name: string;
+    input?: number;
+    output?: number;
+    cache_read?: number;
+    cache_write?: number;
 }
 
 /**
@@ -236,5 +257,60 @@ export function useLastUpdateTime() {
             return apiClient.get<string>('/api/v1/model/last-update-time');
         },
         refetchInterval: 30000,
+    });
+}
+
+/**
+ * 更新渠道内模型价格 Hook
+ *
+ * @example
+ * const updatePrice = useUpdateChannelModelPrice();
+ *
+ * updatePrice.mutate({
+ *   channel_id: 1,
+ *   model_name: 'gpt-4o',
+ *   input: 0.03,
+ *   output: 0.06,
+ * });
+ */
+export function useUpdateChannelModelPrice() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (data: ChannelModelPricePayload) => {
+            return apiClient.post<null>('/api/v1/model/channel-price/update', data);
+        },
+        onSuccess: () => {
+            logger.log('渠道模型价格更新成功');
+            queryClient.invalidateQueries({ queryKey: ['models', 'channel'] });
+        },
+        onError: (error) => {
+            logger.error('渠道模型价格更新失败:', error);
+        },
+    });
+}
+
+/**
+ * 删除渠道内模型价格 Hook（删除后计费回退到全局价）
+ *
+ * @example
+ * const deletePrice = useDeleteChannelModelPrice();
+ *
+ * deletePrice.mutate({ channel_id: 1, model_name: 'gpt-4o' });
+ */
+export function useDeleteChannelModelPrice() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (data: { channel_id: number; model_name: string }) => {
+            return apiClient.post<null>('/api/v1/model/channel-price/delete', data);
+        },
+        onSuccess: () => {
+            logger.log('渠道模型价格已删除');
+            queryClient.invalidateQueries({ queryKey: ['models', 'channel'] });
+        },
+        onError: (error) => {
+            logger.error('渠道模型价格删除失败:', error);
+        },
     });
 }

@@ -264,7 +264,7 @@ func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balanc
 
 	var compactResp responsesCompactResponse
 	if err := json.Unmarshal(body, &compactResp); err == nil {
-		metrics.SetInternalResponse(compactResponseToInternalResponse(&compactResp), metrics.RequestModel)
+		metrics.SetInternalResponse(compactResponseToInternalResponse(&compactResp), metrics.RequestModel, channel.ID)
 	}
 
 	span.End(dbmodel.AttemptSuccess, response.StatusCode, "")

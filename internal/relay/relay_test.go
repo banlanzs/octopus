@@ -972,7 +972,7 @@ func TestRelayMetricsUsesResponseModelForCostLookup(t *testing.T) {
 			PromptTokens:     1000,
 			CompletionTokens: 2000,
 		},
-	}, "gpt-4o-mini")
+	}, "gpt-4o-mini", 0)
 
 	if metrics.ActualModel != "gpt-4o-mini" {
 		t.Fatalf("expected actual model to use response model, got %q", metrics.ActualModel)
@@ -998,7 +998,7 @@ func TestRelayMetricsCapturesOpenAICompatibleInputBreakdown(t *testing.T) {
 				CachedTokens: 900,
 			},
 		},
-	}, "gpt-4o-mini")
+	}, "gpt-4o-mini", 0)
 
 	if metrics.TransportInputTokens == nil || *metrics.TransportInputTokens != tokenizer.CountTokens(string(payload), "gpt-4o-mini") {
 		t.Fatalf("expected transport input tokens to be estimated from payload, got %#v", metrics.TransportInputTokens)
@@ -1027,7 +1027,7 @@ func TestRelayMetricsCapturesAnthropicInputBreakdown(t *testing.T) {
 				CachedTokens: 1200,
 			},
 		},
-	}, "claude-sonnet-4-5")
+	}, "claude-sonnet-4-5", 0)
 
 	if metrics.BillInputTokens == nil || *metrics.BillInputTokens != 400 {
 		t.Fatalf("expected anthropic billed input tokens to keep prompt tokens as-is, got %#v", metrics.BillInputTokens)

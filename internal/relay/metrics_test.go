@@ -9,7 +9,7 @@ import (
 // usage 完全缺失时，应使用 TransportInputTokens 兜底填充 input，output 保持 0。
 func TestSetInternalResponseFallbackWhenUsageMissing(t *testing.T) {
 	m := &RelayMetrics{TransportInputTokens: intPtr(123)}
-	m.SetInternalResponse(&transformerModel.InternalLLMResponse{}, "test-model")
+	m.SetInternalResponse(&transformerModel.InternalLLMResponse{}, "test-model", 0)
 
 	if m.Stats.InputToken != 123 {
 		t.Fatalf("input token: got %d want 123 (fallback)", m.Stats.InputToken)
@@ -27,7 +27,7 @@ func TestSetInternalResponseFallbackWhenInputZero(t *testing.T) {
 	m := &RelayMetrics{TransportInputTokens: intPtr(50)}
 	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
 		Usage: &transformerModel.Usage{PromptTokens: 0, CompletionTokens: 30},
-	}, "test-model")
+	}, "test-model", 0)
 
 	if m.Stats.InputToken != 50 {
 		t.Fatalf("input token: got %d want 50 (fallback)", m.Stats.InputToken)
@@ -42,7 +42,7 @@ func TestSetInternalResponseNoFallbackWhenInputReported(t *testing.T) {
 	m := &RelayMetrics{TransportInputTokens: intPtr(999)}
 	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
 		Usage: &transformerModel.Usage{PromptTokens: 12, CompletionTokens: 7},
-	}, "test-model")
+	}, "test-model", 0)
 
 	if m.Stats.InputToken != 12 {
 		t.Fatalf("input token: got %d want 12 (reported, not fallback)", m.Stats.InputToken)
@@ -57,7 +57,7 @@ func TestSetInternalResponseNoFallbackWhenCacheOnly(t *testing.T) {
 	m := &RelayMetrics{TransportInputTokens: intPtr(999)}
 	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
 		Usage: &transformerModel.Usage{PromptTokens: 0, CacheReadInputTokens: 40, CompletionTokens: 5},
-	}, "test-model")
+	}, "test-model", 0)
 
 	if m.Stats.InputToken != 0 {
 		t.Fatalf("input token: got %d want 0 (cache-only is reported input)", m.Stats.InputToken)

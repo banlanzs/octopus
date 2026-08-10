@@ -44,6 +44,14 @@ func init() {
 				Handle(updateLLMPrice),
 		).
 		AddRoute(
+			router.NewRoute("/channel-price/update", http.MethodPost).
+				Handle(updateChannelModelPrice),
+		).
+		AddRoute(
+			router.NewRoute("/channel-price/delete", http.MethodPost).
+				Handle(deleteChannelModelPrice),
+		).
+		AddRoute(
 			router.NewRoute("/last-update-time", http.MethodGet).
 				Handle(getLastUpdateTime),
 		)
@@ -131,9 +139,19 @@ func listLLMByChannel(c *gin.Context) {
 	// 附加自动排序健康度与熔断冷却摘要（只读）。所有模型都携带：
 	// 无采样时 samples=0，前端展示"暂无采样（冷启动）"占位，方便观察
 	// 哪些模型从未被调用。
+	// 同时附加计费价格（渠道价优先，未配置时为全局兜底价），供价格页渲染。
 	for i := range channels {
+		p := price.GetChannelModelPrice(channels[i].ChannelID, channels[i].Name)
 		h := balancer.AutoRankHealthFor(channels[i].ChannelID, channels[i].Name)
 		channels[i].AutoRank = &h
+		if p != nil {
+			channels[i].Price = p
+		}
+		// 区分是否已单独配置渠道价（GetChannelModelPrice 在无配置时回退全局价，
+		// 无法据此判断来源，需显式查询）。
+		if _, err := op.ChannelModelPriceGet(channels[i].ChannelID, channels[i].Name); err == nil {
+			channels[i].HasChannelPrice = true
+		}
 	}
 	resp.Success(c, channels)
 }
@@ -191,4 +209,45 @@ func updateLLMPrice(c *gin.Context) {
 func getLastUpdateTime(c *gin.Context) {
 	time := price.GetLastUpdateTime()
 	resp.Success(c, time)
+}
+
+func updateChannelModelPrice(c *gin.Context) {
+	var req struct {
+		ChannelID  int     `json:"channel_id" binding:"required"`
+		ModelName  string  `json:"model_name" binding:"required"`
+		Input       float64 `json:"input"`
+		Output     float64 `json:"output"`
+		CacheRead  float64 `json:"cache_read"`
+		CacheWrite float64 `json:"cache_write"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.InvalidJSON(c)
+		return
+	}
+	if err := op.ChannelModelPriceUpsert(req.ChannelID, req.ModelName, model.LLMPrice{
+		Input:      req.Input,
+		Output:     req.Output,
+		CacheRead:  req.CacheRead,
+		CacheWrite: req.CacheWrite,
+	}, c.Request.Context()); err != nil {
+		resp.ErrorWithAppError(c, http.StatusInternalServerError, modelError(codeChannelModelPriceUpdateFailed, "channel model price update failed", err))
+		return
+	}
+	resp.Success(c, nil)
+}
+
+func deleteChannelModelPrice(c *gin.Context) {
+	var req struct {
+		ChannelID int    `json:"channel_id" binding:"required"`
+		ModelName string `json:"model_name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.InvalidJSON(c)
+		return
+	}
+	if err := op.ChannelModelPriceDelete(req.ChannelID, req.ModelName, c.Request.Context()); err != nil {
+		resp.ErrorWithAppError(c, http.StatusInternalServerError, modelError(codeChannelModelPriceDeleteFailed, "channel model price delete failed", err))
+		return
+	}
+	resp.Success(c, nil)
 }
