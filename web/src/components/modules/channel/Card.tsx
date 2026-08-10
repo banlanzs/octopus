@@ -6,7 +6,7 @@ import {
 } from '@/components/ui/morphing-dialog';
 import { CheckCircle2, DollarSign, Key, Layers, MessageSquare, XCircle } from 'lucide-react';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
-import { type Channel, useEnableChannel } from '@/api/endpoints/channel';
+import { ChannelType, type Channel, useEnableChannel } from '@/api/endpoints/channel';
 import { CardContent } from './CardContent';
 import { useTranslations } from 'next-intl';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/animate-ui/components/animate/tooltip';
@@ -32,6 +32,8 @@ export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; st
         ...splitModels(channel.custom_model),
     ]).size;
     const enabledKeyCount = channel.keys.filter((item) => item.enabled).length;
+    const typeName = ChannelType[channel.type];
+    const typeLabel = typeName !== undefined ? tForm(`type${typeName}`) : null;
 
     const handleEnableChange = (checked: boolean) => {
         enableChannel.mutate(
@@ -53,12 +55,19 @@ export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; st
                 <article className="flex flex-col gap-4 rounded-3xl border border-border bg-card text-card-foreground p-4 transition-all duration-300">
                     <header className="relative flex items-center justify-between gap-2">
                         <div className="min-w-0 flex-1">
-                            <Tooltip side="top" sideOffset={10} align="center">
-                                <TooltipTrigger asChild>
-                                    <h3 className="text-lg font-bold truncate min-w-0">{channel.name}</h3>
-                                </TooltipTrigger>
-                                <TooltipContent key={channel.name}>{channel.name}</TooltipContent>
-                            </Tooltip>
+                            <div className="flex min-w-0 items-center gap-2">
+                                <Tooltip side="top" sideOffset={10} align="center">
+                                    <TooltipTrigger asChild>
+                                        <h3 className="truncate min-w-0 text-lg font-bold">{channel.name}</h3>
+                                    </TooltipTrigger>
+                                    <TooltipContent key={channel.name}>{channel.name}</TooltipContent>
+                                </Tooltip>
+                                {typeLabel ? (
+                                    <span className="inline-flex shrink-0 items-center rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                        {typeLabel}
+                                    </span>
+                                ) : null}
+                            </div>
                             {channel.managed ? (
                                 <div className="mt-1">
                                     <span className="inline-flex rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
