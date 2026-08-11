@@ -209,3 +209,19 @@ func (s *AttemptSpan) End(status model.AttemptStatus, statusCode int, msg string
 func (s *AttemptSpan) Duration() time.Duration {
 	return time.Since(s.startTime)
 }
+
+// SetRequestBody 记录该尝试的出站请求体（调用方负责开关与截断）。End 后无效。
+func (s *AttemptSpan) SetRequestBody(data []byte) {
+	if s.ended || len(data) == 0 {
+		return
+	}
+	s.attempt.RequestBody = string(data)
+}
+
+// SetResponseBody 记录该尝试的失败响应体（调用方负责开关与截断）。End 后无效。
+func (s *AttemptSpan) SetResponseBody(data []byte) {
+	if s.ended || len(data) == 0 {
+		return
+	}
+	s.attempt.ResponseBody = string(data)
+}

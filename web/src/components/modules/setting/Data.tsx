@@ -16,6 +16,7 @@ export function SettingData() {
 
     // 历史日志与统计持久化
     const logEnabled = useSettingToggle(SettingKey.RelayLogKeepEnabled);
+    const failedDetail = useSettingToggle(SettingKey.RelayLogFailedDetailEnabled);
     const keepPeriod = useSettingField(SettingKey.RelayLogKeepPeriod);
     const statsInterval = useSettingField(SettingKey.StatsSaveInterval);
     const clearLogs = useClearLogs();
@@ -100,6 +101,9 @@ export function SettingData() {
             <SettingSection title={t('log.title')} />
             <SettingRow icon={ScrollText} label={t('log.enabled.label')}>
                 <Switch checked={logEnabled.enabled} onCheckedChange={logEnabled.toggle} />
+            </SettingRow>
+            <SettingRow icon={FileArchive} label={t('log.failedDetail.label')}>
+                <Switch checked={failedDetail.enabled} onCheckedChange={failedDetail.toggle} />
             </SettingRow>
             <SettingRow icon={Calendar} label={t('log.keepPeriod.label')}>
                 <Input

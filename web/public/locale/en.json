@@ -508,7 +508,11 @@
                 "clearing": "Clearing..."
             },
             "clearSuccess": "Logs cleared",
-            "clearFailed": "Failed to clear logs"
+            "clearFailed": "Failed to clear logs",
+            "failedDetail": {
+                "label": "Record failed request details",
+                "description": "Log outbound request/response body of failed attempts for debugging upstream errors (truncated)"
+            }
         },
         "network": {
             "title": "Network & Service"
@@ -887,7 +891,9 @@
             "wsReconnectHint": "The upstream WebSocket continuation broke, and this request recovered after reconnecting the same route.",
             "wsReplayRecoveryHint": "This request first failed to continue, then automatically replayed the transcript to recover the context and establish a new continuation anchor.",
             "wsDowngradeHint": "This request first tried upstream WebSocket, but automatically downgraded to HTTP when WebSocket was unavailable.",
-            "reasoningEffort": "Reasoning"
+            "reasoningEffort": "Reasoning",
+            "failedDetail": "Failed details",
+            "failedResponseBody": "Failed response body"
         }
     },
     "channel": {

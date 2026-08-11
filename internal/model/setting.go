@@ -17,6 +17,7 @@ const (
 	SettingKeySiteCheckinInterval              SettingKey = "site_checkin_interval"                // 站点自动签到间隔(小时)
 	SettingKeyRelayLogKeepPeriod               SettingKey = "relay_log_keep_period"                // 日志保存时间范围(天)
 	SettingKeyRelayLogKeepEnabled              SettingKey = "relay_log_keep_enabled"               // 是否保留历史日志
+	SettingKeyRelayLogFailedDetailEnabled      SettingKey = "relay_log_failed_detail_enabled"      // 失败尝试是否记录请求体/响应体详情
 	SettingKeyCORSAllowOrigins                 SettingKey = "cors_allow_origins"                   // 跨域白名单(逗号分隔, 如 "example.com,example2.com"). 为空不允许跨域, "*"允许所有
 	SettingKeyCircuitBreakerThreshold          SettingKey = "circuit_breaker_threshold"            // 熔断触发阈值（连续失败次数）
 	SettingKeyCircuitBreakerChannelThreshold   SettingKey = "circuit_breaker_channel_threshold"     // 渠道级熔断触发阈值（连续渠道级失败次数）
@@ -88,6 +89,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeySiteCheckinInterval, Value: "24"},             // 默认24小时自动签到一次
 		{Key: SettingKeyRelayLogKeepPeriod, Value: "7"},               // 默认日志保存7天
 		{Key: SettingKeyRelayLogKeepEnabled, Value: "true"},           // 默认保留历史日志
+		{Key: SettingKeyRelayLogFailedDetailEnabled, Value: "true"},   // 默认记录失败尝试请求详情
 		{Key: SettingKeyCircuitBreakerThreshold, Value: "5"},          // 默认连续失败5次触发熔断
 		{Key: SettingKeyCircuitBreakerChannelThreshold, Value: "3"},   // 默认连续3次渠道级失败触发渠道熔断
 		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},          // 默认基础冷却60秒

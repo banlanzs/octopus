@@ -508,7 +508,11 @@
                 "clearing": "清空中..."
             },
             "clearSuccess": "日志已清空",
-            "clearFailed": "清空失败"
+            "clearFailed": "清空失败",
+            "failedDetail": {
+                "label": "记录失败调用请求详情",
+                "description": "失败尝试记录出站请求体与响应体，便于排查上游错误（含截断）"
+            }
         },
         "network": {
             "title": "网络与服务"
@@ -887,7 +891,9 @@
             "wsReconnectHint": "本次请求原本的上游 WebSocket 链路已断开，重新建立连接后恢复成功。",
             "wsReplayRecoveryHint": "本次请求先尝试续传失败，随后自动回放历史内容恢复了上下文，并建立了新的续传锚点。",
             "wsDowngradeHint": "本次请求原本尝试走上游 WebSocket，但因上游不可用已自动降级为 HTTP。",
-            "reasoningEffort": "推理强度"
+            "reasoningEffort": "推理强度",
+            "failedDetail": "失败详情",
+            "failedResponseBody": "失败响应体"
         }
     },
     "channel": {

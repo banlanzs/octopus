@@ -28,6 +28,8 @@ export interface ChannelAttempt {
     duration: number;       // 耗时(毫秒)
     sticky?: boolean;
     msg?: string;
+    request_body?: string;  // 失败详情：出站请求体（开关控制，截断）
+    response_body?: string; // 失败详情：响应体（开关控制，截断）
 }
 
 /**

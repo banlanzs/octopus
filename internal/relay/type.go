@@ -118,6 +118,7 @@ type relayAttempt struct {
 	firstTokenBudget     *firstTokenBudget
 	retryAfter           time.Duration // forward() 提取后暂存
 	firstTokenUnixNano   atomic.Int64
+	attemptSpan          *balancer.AttemptSpan // 当前尝试的 span，用于记录失败详情（请求体/响应体）
 }
 
 // attemptResult 封装单次尝试的结果

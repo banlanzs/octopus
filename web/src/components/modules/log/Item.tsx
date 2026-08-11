@@ -617,6 +617,43 @@ function ResponseContentPanel({ log, isLoading }: { log: RelayLog; isLoading?: b
     );
 }
 
+function AttemptDetailBlock({ attempt }: { attempt: MergedAttempt }) {
+    const t = useTranslations('log.card');
+    const [open, setOpen] = useState(false);
+    const hasReq = !!attempt.request_body;
+    const hasResp = !!attempt.response_body;
+    if (!hasReq && !hasResp) return null;
+
+    return (
+        <div className="flex flex-col gap-1.5">
+            <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                className="self-start flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-card-foreground hover:bg-muted/50 transition-colors"
+            >
+                <ChevronDown className={cn('size-3 transition-transform', open && 'rotate-180')} />
+                {t('failedDetail')}
+            </button>
+            {open ? (
+                <div className="flex flex-col gap-2">
+                    {hasReq ? (
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                            <span className="text-[10px] font-semibold text-muted-foreground">{t('requestBody')}</span>
+                            <pre className="max-h-40 overflow-auto rounded-lg bg-muted/50 p-2 text-[10px] font-mono whitespace-pre-wrap wrap-break-word">{attempt.request_body}</pre>
+                        </div>
+                    ) : null}
+                    {hasResp ? (
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                            <span className="text-[10px] font-semibold text-muted-foreground">{t('failedResponseBody')}</span>
+                            <pre className="max-h-40 overflow-auto rounded-lg bg-muted/50 p-2 text-[10px] font-mono whitespace-pre-wrap wrap-break-word">{attempt.response_body}</pre>
+                        </div>
+                    ) : null}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
 function AttemptDisableButton({
     target,
     pending,
@@ -1083,6 +1120,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                                         {sanitizedMsg}
                                                                                     </div>
                                                                                 ) : null}
+                                                                                <AttemptDetailBlock attempt={attempt} />
                                                                             </div>
                                                                         );
                                                                     });

@@ -560,9 +560,14 @@ func (req *relayRequest) fallbackAttempt(item dbmodel.GroupItem, group dbmodel.G
 func (ra *relayAttempt) attempt() attemptResult {
 	startedAt := time.Now()
 	span := ra.iter.StartAttempt(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, ra.internalRequest.Model)
+	// 绑定当前 span，供失败详情收集（请求体/响应体）在转发期间写入。
+	ra.attemptSpan = span
 
 	// 转发请求
 	statusCode, fwdErr := ra.forward()
+
+	// 转发结束，解除 span 绑定（span.End 后不再写入）
+	ra.attemptSpan = nil
 
 	// 更新 channel key 状态
 	ra.usedKey.StatusCode = statusCode
@@ -1026,6 +1031,7 @@ func (ra *relayAttempt) forwardViaHTTPPassthrough(ctx context.Context, pt model.
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		ra.retryAfter = parseRetryAfter(response.Header.Get("Retry-After"))
 		body, _ := io.ReadAll(response.Body)
+		ra.recordAttemptResponseBody(body)
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
 		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
 		return statusCode, fmt.Errorf("upstream error: %d: %s", response.StatusCode, string(body))
@@ -1110,6 +1116,7 @@ func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error)
 		if err != nil {
 			return response.StatusCode, fmt.Errorf("failed to read response body: %w", err)
 		}
+		ra.recordAttemptResponseBody(body)
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
 		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
 		return statusCode, fmt.Errorf("upstream error: %d: %s", response.StatusCode, string(body))
@@ -1165,6 +1172,39 @@ func (ra *relayAttempt) getStreamWriter() StreamWriter {
 	return ra.c.Writer
 }
 
+// maxFailedDetailBytes 是失败详情（请求体/响应体）记录的最大字节数，防止日志膨胀。
+const maxFailedDetailBytes = 128 * 1024
+
+// failedDetailEnabled 检查失败详情记录开关（relay_log_failed_detail_enabled）。
+func failedDetailEnabled() bool {
+	enabled, err := op.SettingGetBool(dbmodel.SettingKeyRelayLogFailedDetailEnabled)
+	return err == nil && enabled
+}
+
+// recordAttemptRequestBody 把出站请求体（转换后形态）写入当前尝试 span，
+// 供失败日志展示。受开关与截断控制。
+func (ra *relayAttempt) recordAttemptRequestBody(body []byte) {
+	if ra.attemptSpan == nil || len(body) == 0 || !failedDetailEnabled() {
+		return
+	}
+	if len(body) > maxFailedDetailBytes {
+		body = body[:maxFailedDetailBytes]
+	}
+	ra.attemptSpan.SetRequestBody(body)
+}
+
+// recordAttemptResponseBody 把失败响应体写入当前尝试 span，供失败日志展示。
+// 受开关与截断控制。
+func (ra *relayAttempt) recordAttemptResponseBody(body []byte) {
+	if ra.attemptSpan == nil || len(body) == 0 || !failedDetailEnabled() {
+		return
+	}
+	if len(body) > maxFailedDetailBytes {
+		body = body[:maxFailedDetailBytes]
+	}
+	ra.attemptSpan.SetResponseBody(body)
+}
+
 // applyParamOverride merges channel-level JSON request overrides and records the final upstream payload.
 func (ra *relayAttempt) applyParamOverride(outboundRequest *http.Request) error {
 	if err := helper.ApplyParamOverride(outboundRequest, ra.channel.ParamOverride); err != nil {
@@ -1172,6 +1212,7 @@ func (ra *relayAttempt) applyParamOverride(outboundRequest *http.Request) error 
 	}
 	if requestBody, readErr := readOutboundRequestBody(outboundRequest); readErr == nil {
 		ra.metrics.SetTransportRequestPayload(requestBody, ra.internalRequest.Model)
+		ra.recordAttemptRequestBody(requestBody)
 	}
 	return nil
 }

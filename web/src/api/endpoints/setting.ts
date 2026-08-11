@@ -20,6 +20,7 @@ export const SettingKey = {
     SiteCheckinInterval: 'site_checkin_interval',
     RelayLogKeepEnabled: 'relay_log_keep_enabled',
     RelayLogKeepPeriod: 'relay_log_keep_period',
+    RelayLogFailedDetailEnabled: 'relay_log_failed_detail_enabled',
     CORSAllowOrigins: 'cors_allow_origins',
     CircuitBreakerThreshold: 'circuit_breaker_threshold',
     CircuitBreakerCooldown: 'circuit_breaker_cooldown',
