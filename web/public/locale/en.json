@@ -269,7 +269,7 @@
         },
         "autoRank": {
             "title": "Auto ranking (Auto mode)",
-            "hint": "Only takes effect when a group is switched to Auto mode. Ranks candidates by live request performance (success rate + latency); cold-start / low-traffic models get sampling chances via the explore ratio, then join normal ranking once sufficiently sampled.",
+            "hint": "Only takes effect in Auto mode. Maintains a dynamic priority list of stable, fast candidates and fairly shares traffic across comparable channels and models.",
             "enabled": {
                 "label": "Enable auto ranking",
                 "description": "When disabled, Auto mode falls back to the original configured order (no ranking, no learning)."
@@ -277,7 +277,7 @@
             "exploreRatio": {
                 "label": "Explore ratio (%)",
                 "placeholder": "20",
-                "description": "Ratio of requests that try an under-sampled (including zero-sample) candidate first, so cold-start models accumulate samples; under-sampled candidates are rotated randomly."
+                "description": "Runs deterministic bounded exploration at this ratio. Sustained traffic covers every under-sampled candidate in turn and periodically revisits sampled candidates."
             },
             "minSamples": {
                 "label": "Min samples",
@@ -285,7 +285,7 @@
                 "description": "A candidate joins score-based ranking once it has at least this many samples; below that it ranks after sufficiently-sampled candidates."
             },
             "interval": {
-                "label": "Learn interval (s)",
+                "label": "Snapshot & cleanup interval (s)",
                 "placeholder": "60",
                 "description": "Interval at which the background controller persists stats snapshots and reaps expired windows."
             },
@@ -676,12 +676,15 @@
             "noHttpStatus": "No HTTP status",
             "autoRank": {
                 "title": "Auto-rank health",
-                "score": "Score",
+                "effectiveScore": "Effective score",
                 "successRate": "Success rate",
                 "latency": "Latency",
+                "ttfb": "First token",
                 "samples": "Samples",
                 "failures": "Failures",
-                "empty": "No samples yet (cold start, ranked last)",
+                "rank": "Dynamic rank",
+                "share": "Target / actual share",
+                "empty": "No samples yet (awaiting deterministic exploration)",
                 "degradedHint": "Channel degraded: multiple models degraded in the window, scores suppressed",
                 "tripped": "Channel tripped",
                 "cooldown": "Cooldown {time} left",

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
 import { AutoGroupType } from './channel';
+import type { AutoRankHealth } from './model';
 
 /**
  * 分组项信息
@@ -13,6 +14,7 @@ export interface GroupItem {
     model_name: string;
     priority: number;
     weight: number;
+    auto_rank?: AutoRankHealth;
 }
 
 /**
@@ -517,4 +519,3 @@ export function useToggleGroupPin() {
         onError: (error) => logger.error('置顶切换失败:', error),
     });
 }
-

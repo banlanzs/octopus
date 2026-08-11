@@ -15,6 +15,8 @@ type Iterator struct {
 	stickyIdx   int // 粘性通道在 candidates 中的位置，-1 表示无
 	stickyKeyID int
 	modelName   string // 请求模型名（用于熔断检查）
+	groupID     int
+	autoMode    bool
 
 	// 内嵌追踪
 	attempts []model.ChannelAttempt
@@ -30,7 +32,7 @@ func NewIterator(group model.Group, apiKeyID int, requestModel string) *Iterator
 // NewIteratorWithPreference 创建带优先通道偏好的负载均衡迭代器。
 // preferred 非空时，会优先把指定通道提前到候选列表最前面。
 func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel string, preferred *SessionEntry) *Iterator {
-	b := GetBalancer(group.Mode)
+	b := GetBalancer(group.Mode, group.ID)
 	candidates := b.Candidates(group.Items)
 
 	stickyIdx := -1
@@ -54,7 +56,7 @@ func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel str
 		if sticky := GetSticky(apiKeyID, requestModel, stickyTTL); sticky != nil {
 			// 会话粘性不绕过渠道级聚合惩罚：被惩罚渠道不强制提前到首位
 			// （replay 硬粘性走上面的 preferred 分支，保持强制）。
-			if !IsChannelDegraded(sticky.ChannelID) {
+			if !IsChannelDegradedForGroup(group.ID, sticky.ChannelID) {
 				for i, item := range candidates {
 					if item.ChannelID == sticky.ChannelID {
 						if i > 0 {
@@ -78,6 +80,8 @@ func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel str
 		stickyIdx:   stickyIdx,
 		stickyKeyID: stickyKeyID,
 		modelName:   requestModel,
+		groupID:     group.ID,
+		autoMode:    group.Mode == model.GroupModeAuto && autoRankEnabled(),
 	}
 }
 
@@ -159,6 +163,9 @@ func (it *Iterator) SkipCircuitBreak(channelID, channelKeyID int, channelName st
 // 全冷却兜底等"迭代器已耗尽后"的探测场景同样安全。
 func (it *Iterator) StartAttempt(channelID, channelKeyID int, channelName, modelName string) *AttemptSpan {
 	it.count++
+	if it.autoMode {
+		RecordAutoDispatch(it.groupID, channelID, modelName)
+	}
 	return &AttemptSpan{
 		attempt: model.ChannelAttempt{
 			ChannelID:    channelID,

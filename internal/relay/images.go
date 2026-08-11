@@ -176,10 +176,16 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 			requestModel, group.Mode, channel.Name, item.ModelName,
 			iter.Index()+1, iter.Len(), iter.IsSticky(), stream)
 
+		candidateStartedAt := time.Now()
 		span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
 
 		// 尝试一次转发
 		statusCode, written, usage, upstreamCT, fwdErr := imagesAttempt(ctx, endpoint, c, bc, isMultipart, boundary, jsonPayload, stream, channel, usedKey.ChannelKey, group.FirstTokenTimeOut, metrics, item.ModelName, hb)
+		durationMS := time.Since(candidateStartedAt).Milliseconds()
+		ttfbMS := durationMS
+		if !metrics.FirstToken.IsZero() && !metrics.FirstToken.Before(candidateStartedAt) {
+			ttfbMS = metrics.FirstToken.Sub(candidateStartedAt).Milliseconds()
+		}
 
 		// 更新 channel key 状态
 		usedKey.StatusCode = statusCode
@@ -208,6 +214,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 			balancer.RecordSuccess(channel.ID, usedKey.ID, item.ModelName)
 			// 会话保持：更新粘性记录
 			balancer.SetSticky(apiKeyID, requestModel, channel.ID, usedKey.ID)
+			recordAutoRankResult(group, channel.ID, item.ModelName, true, statusCode, durationMS, ttfbMS)
 
 			metrics.SaveWithChannelStats(ctx, true, nil, iter.Attempts(), false)
 			return
@@ -225,6 +232,9 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 
 		// 熔断器：记录失败
 		balancer.RecordFailure(channel.ID, usedKey.ID, item.ModelName, circuitFailureKind(group.RetryEnabled, statusCode))
+		if ctx.Err() == nil {
+			recordAutoRankResult(group, channel.ID, item.ModelName, false, statusCode, durationMS, ttfbMS)
+		}
 
 		if written {
 			metrics.SaveWithChannelStats(ctx, false, fwdErr, iter.Attempts(), false)

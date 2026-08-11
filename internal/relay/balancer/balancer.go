@@ -20,7 +20,11 @@ type Balancer interface {
 }
 
 // GetBalancer 根据模式返回对应的负载均衡器
-func GetBalancer(mode model.GroupMode) Balancer {
+func GetBalancer(mode model.GroupMode, groupID ...int) Balancer {
+	id := 0
+	if len(groupID) > 0 {
+		id = groupID[0]
+	}
 	switch mode {
 	case model.GroupModeRoundRobin:
 		return &RoundRobin{}
@@ -31,7 +35,7 @@ func GetBalancer(mode model.GroupMode) Balancer {
 	case model.GroupModeWeighted:
 		return &Weighted{}
 	case model.GroupModeAuto:
-		return &Auto{}
+		return &Auto{GroupID: id}
 	default:
 		return &RoundRobin{}
 	}

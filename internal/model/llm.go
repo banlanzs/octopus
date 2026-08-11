@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 type LLMPrice struct {
 	Input      float64 `json:"input"`
 	Output     float64 `json:"output"`
@@ -48,7 +50,7 @@ type LLMChannel struct {
 
 // LLMAutoRankHealth 渠道-模型的 AutoRank 被动性能统计与熔断状态摘要。
 // 字段全部来自 relay/balancer 的实时窗口（AutoRankStats + 渠道级熔断），
-// 不做持久化，仅随 /api/v1/model/channel 返回给管理面板展示。
+// 不做持久化，随模型渠道或分组列表返回给管理面板展示。
 type LLMAutoRankHealth struct {
 	// Samples 时间窗口内采样的请求数。
 	Samples int `json:"samples"`
@@ -56,11 +58,24 @@ type LLMAutoRankHealth struct {
 	Failures int `json:"failures"`
 	// SuccessRate 窗口成功率（0~1），无样本时为 0。
 	SuccessRate float64 `json:"success_rate"`
+	// SuccessConfidence Wilson 置信下界，用于避免少量成功样本过早登顶。
+	SuccessConfidence float64 `json:"success_confidence"`
 	// EWMALatencyMS 窗口内 EWMA 平滑后的延迟（毫秒）。
 	EWMALatencyMS float64 `json:"ewma_latency_ms"`
-	// Score 基础排序得分：成功率*100 - 延迟(秒)。
+	// EWMATTFBMS 首 Token 时间的 EWMA；无独立首 Token 时回退为完整耗时。
+	EWMATTFBMS float64 `json:"ewma_ttfb_ms"`
+	// Score 基础排序得分：成功率置信下界*100 - 延迟(秒)。
 	// 与 AutoRank 排序档位一致（无样本/样本不足时仅供参考）。
 	Score float64 `json:"score"`
+	// EffectiveScore 应用渠道修正后的实际质量得分。
+	EffectiveScore   float64   `json:"effective_score"`
+	Rank             int       `json:"rank"`
+	Tier             int       `json:"tier"`
+	TargetShare      float64   `json:"target_share"`
+	ActualShare      float64   `json:"actual_share"`
+	LastSampleAt     time.Time `json:"last_sample_at"`
+	LastDispatchedAt time.Time `json:"last_dispatched_at"`
+	SelectionReason  string    `json:"selection_reason"`
 	// Degraded 渠道是否处于聚合惩罚状态（系数 <1）：窗口内多模型同时
 	// 恶化导致该渠道所有模型得分被统一压低。
 	Degraded bool `json:"degraded"`

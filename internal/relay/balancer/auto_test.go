@@ -2,7 +2,6 @@ package balancer
 
 import (
 	"math"
-	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -102,47 +101,10 @@ func TestAutoRankLessTiers(t *testing.T) {
 	}
 }
 
-func TestPickUnderSampled(t *testing.T) {
-	AutoRankReset()
-	// c1 样本充足；c2/c3 无样本（最需探索）
-	for i := 0; i < 5; i++ {
-		RecordAutoSample(1, "gpt-4o", true, 100)
-	}
-
-	items := []model.GroupItem{
-		{ChannelID: 1, ModelName: "gpt-4o"},
-		{ChannelID: 2, ModelName: "gpt-4o"},
-		{ChannelID: 3, ModelName: "gpt-4o"},
-	}
-	// 确定性随机源：多个欠采样候选应被随机轮换，而非固定返回第一个。
-	seen := map[int]bool{}
-	for seed := uint64(0); seed < 50; seed++ {
-		rng := rand.New(rand.NewPCG(seed, seed*7+1))
-		idx := pickUnderSampled(items, 3, rng.IntN)
-		if idx != 1 && idx != 2 {
-			t.Fatalf("expected under-sampled index 1 or 2, got %d", idx)
-		}
-		seen[idx] = true
-	}
-	if len(seen) < 2 {
-		t.Fatalf("expected both under-sampled candidates to be picked across seeds, got %v", seen)
-	}
-
-	// 全部充分采样 → -1
-	AutoRankReset()
-	for i := 0; i < 5; i++ {
-		RecordAutoSample(4, "gpt-4o", true, 100)
-	}
-	items2 := []model.GroupItem{{ChannelID: 4, ModelName: "gpt-4o"}}
-	if idx := pickUnderSampled(items2, 3, rand.IntN); idx != -1 {
-		t.Fatalf("expected no under-sampled candidate, got %d", idx)
-	}
-}
-
 func TestAutoRankRestore(t *testing.T) {
 	AutoRankReset()
 	AutoRankRestore([]model.AutoRankSnapshot{
-		{ChannelID: 6, ModelName: "gpt-4o", Samples: 10, Failures: 2, EWMALatencyMS: 800},
+		{ChannelID: 6, ModelName: "gpt-4o", Samples: 10, Failures: 2, EWMALatencyMS: 800, LastSeenAt: time.Now()},
 	})
 	st := GetAutoRankStats(6, "gpt-4o")
 	if st.Samples != 10 {
@@ -153,6 +115,27 @@ func TestAutoRankRestore(t *testing.T) {
 	}
 	if st.EWMALatencyMS != 800 {
 		t.Fatalf("expected restored ewma 800, got %v", st.EWMALatencyMS)
+	}
+}
+
+func TestAutoRankRestoreSkipsExpiredSnapshot(t *testing.T) {
+	AutoRankReset()
+	AutoRankRestore([]model.AutoRankSnapshot{
+		{GroupID: 3, ChannelID: 6, ModelName: "gpt-4o", Samples: 10, LastSeenAt: time.Now().Add(-2 * AutoRankTimeWindow)},
+	})
+	if st := GetAutoRankStatsForGroup(3, 6, "gpt-4o"); st.Samples != 0 {
+		t.Fatalf("expected expired snapshot to stay discarded, got %+v", st)
+	}
+}
+
+func TestAutoRankRestorePreservesFailureRatioWhenCapped(t *testing.T) {
+	AutoRankReset()
+	AutoRankRestore([]model.AutoRankSnapshot{
+		{GroupID: 3, ChannelID: 6, ModelName: "gpt-4o", Samples: 40, Failures: 20, EWMALatencyMS: 800, LastSeenAt: time.Now()},
+	})
+	stats := GetAutoRankStatsForGroup(3, 6, "gpt-4o")
+	if stats.Samples != AutoRankPhysicalCap || stats.Failures != AutoRankPhysicalCap/2 {
+		t.Fatalf("expected capped window to preserve 50%% failure rate, got %+v", stats)
 	}
 }
 
@@ -174,14 +157,14 @@ func TestTargetFactorForRate(t *testing.T) {
 		rate float64
 		want float64
 	}{
-		{0.95, 1.0},  // 健康
-		{0.90, 1.0},  // 边界 >=0.9
-		{0.85, 0.6},  // 轻微降级
-		{0.70, 0.6},  // 边界 >=0.7
-		{0.60, 0.4},  // 明显降级
-		{0.50, 0.4},  // 边界 >=0.5
-		{0.30, 0.3},  // 濒危
-		{0.00, 0.3},  // 全失败
+		{0.95, 1.0}, // 健康
+		{0.90, 1.0}, // 边界 >=0.9
+		{0.85, 0.6}, // 轻微降级
+		{0.70, 0.6}, // 边界 >=0.7
+		{0.60, 0.4}, // 明显降级
+		{0.50, 0.4}, // 边界 >=0.5
+		{0.30, 0.3}, // 濒危
+		{0.00, 0.3}, // 全失败
 	}
 	for _, c := range cases {
 		if got := targetFactorForRate(c.rate); got != c.want {
@@ -307,7 +290,7 @@ func TestAutoRankLessScoredChannelPenalty(t *testing.T) {
 	channelAggregateFactor(1, channelAggregate{models: 2, totalSamples: 20, totalFails: 1, failModels: 1})
 	channelAggregateFactor(2, channelAggregate{models: 2, totalSamples: 20, totalFails: 16, failModels: 2})
 
-	healthy := AutoRankStats{Samples: 10, SuccessRate: 0.9, EWMALatencyMS: 3000} // 得分 87
+	healthy := AutoRankStats{Samples: 10, SuccessRate: 0.9, EWMALatencyMS: 3000}     // 得分 87
 	fastDegraded := AutoRankStats{Samples: 10, SuccessRate: 1.0, EWMALatencyMS: 100} // 得分 99.9，被渠道惩罚压制
 
 	// 渠道惩罚后：被惩罚渠道的候选不应排在健康渠道候选之前（级联降级）
@@ -453,4 +436,167 @@ func TestAutoRankHealthFor(t *testing.T) {
 		t.Fatalf("read-only status must not advance Open -> HalfOpen")
 	}
 	AutoRankReset()
+}
+
+func TestAutoRankStatsAreIsolatedByGroup(t *testing.T) {
+	AutoRankReset()
+	RecordAutoSampleForGroup(11, 7, "gpt-5", true, 800, 250)
+
+	group11 := GetAutoRankStatsForGroup(11, 7, "gpt-5")
+	if group11.Samples != 1 || group11.EWMATTFBMS != 250 {
+		t.Fatalf("expected group 11 sample, got %+v", group11)
+	}
+	if group12 := GetAutoRankStatsForGroup(12, 7, "gpt-5"); group12.Samples != 0 {
+		t.Fatalf("expected group 12 to be isolated, got %+v", group12)
+	}
+}
+
+func TestAutoScheduleDeterministicallyCoversColdCandidates(t *testing.T) {
+	AutoRankReset()
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m1"}, AutoRankStats{}, 0),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "m2"}, AutoRankStats{}, 0),
+		newAutoCandidate(model.GroupItem{ChannelID: 3, ModelName: "m3"}, AutoRankStats{}, 0),
+	}
+	seen := map[int]bool{}
+	for i := 0; i < 11; i++ {
+		ordered := scheduleAutoCandidates(21, candidates, testAutoScheduleConfig(0.2))
+		seen[ordered[0].item.ChannelID] = true
+	}
+	if len(seen) != len(candidates) {
+		t.Fatalf("expected bounded exploration to cover all candidates, saw channels %v", seen)
+	}
+}
+
+func TestAutoScheduleSharesTrafficAcrossCompetitiveChannelsAndModels(t *testing.T) {
+	AutoRankReset()
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m1"}, AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.96, EWMATTFBMS: 400}, 95.6),
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m2"}, AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.95, EWMATTFBMS: 420}, 95.0),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "m3"}, AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.95, EWMATTFBMS: 430}, 94.9),
+	}
+	counts := map[string]int{}
+	channelCounts := map[int]int{}
+	for i := 0; i < 120; i++ {
+		ordered := scheduleAutoCandidates(22, candidates, testAutoScheduleConfig(0))
+		first := ordered[0].item
+		counts[first.ModelName]++
+		channelCounts[first.ChannelID]++
+	}
+	for _, name := range []string{"m1", "m2", "m3"} {
+		if counts[name] == 0 {
+			t.Fatalf("expected competitive model %s to receive traffic, counts=%v", name, counts)
+		}
+	}
+	if channelCounts[1] > 84 || channelCounts[2] == 0 {
+		t.Fatalf("expected channel cap to prevent monopolization, channel counts=%v", channelCounts)
+	}
+}
+
+func TestAutoScheduleKeepsTargetsDuringExploration(t *testing.T) {
+	AutoRankReset()
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m1"}, AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.95, EWMATTFBMS: 400}, 95),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "m2"}, AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.95, EWMATTFBMS: 400}, 95),
+	}
+	scheduleAutoCandidates(24, candidates, testAutoScheduleConfig(1))
+	for _, candidate := range candidates {
+		stats := GetAutoDispatchStats(24, candidate.item.ChannelID, candidate.item.ModelName)
+		if stats.TargetShare <= 0 {
+			t.Fatalf("expected target share during exploration, got %+v", stats)
+		}
+	}
+}
+
+func TestAutoScheduleKeepsPoorCandidateOutOfMainTraffic(t *testing.T) {
+	AutoRankReset()
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "healthy"}, AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.96, EWMATTFBMS: 400}, 95.6),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "poor"}, AutoRankStats{Samples: 20, SuccessRate: 0.7, SuccessConfidence: 0.6, EWMATTFBMS: 900}, 59.1),
+	}
+	for i := 0; i < 30; i++ {
+		ordered := scheduleAutoCandidates(23, candidates, testAutoScheduleConfig(0))
+		if ordered[0].item.ModelName != "healthy" {
+			t.Fatalf("poor candidate unexpectedly received main traffic: %+v", ordered[0])
+		}
+	}
+}
+
+func TestAutoScheduleUsesStableTieBreakers(t *testing.T) {
+	AutoRankReset()
+	stats := AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.95, EWMATTFBMS: 400, LastSeenAt: time.Now()}
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "m2"}, stats, 95),
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m1"}, stats, 95),
+	}
+
+	for groupID := 1000; groupID < 1100; groupID++ {
+		scheduleAutoCandidates(groupID, candidates, testAutoScheduleConfig(0))
+		scheduleAutoCandidates(groupID, candidates, testAutoScheduleConfig(0))
+		ordered := scheduleAutoCandidates(groupID, candidates, testAutoScheduleConfig(0))
+		if got := ordered[0].item.ChannelID; got != 1 {
+			t.Fatalf("expected stable lower-channel tie break, got channel %d", got)
+		}
+	}
+
+	sameChannel := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 3, ModelName: "m2"}, stats, 95),
+		newAutoCandidate(model.GroupItem{ChannelID: 3, ModelName: "m1"}, stats, 95),
+	}
+	for groupID := 1100; groupID < 1200; groupID++ {
+		scheduleAutoCandidates(groupID, sameChannel, testAutoScheduleConfig(0))
+		scheduleAutoCandidates(groupID, sameChannel, testAutoScheduleConfig(0))
+		ordered := scheduleAutoCandidates(groupID, sameChannel, testAutoScheduleConfig(0))
+		if got := ordered[0].item.ModelName; got != "m1" {
+			t.Fatalf("expected stable model-name tie break, got model %s", got)
+		}
+	}
+}
+
+func TestAutoRankReapRemovesIdleScheduleState(t *testing.T) {
+	AutoRankReset()
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m1"}, AutoRankStats{}, 0),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "m2"}, AutoRankStats{}, 0),
+	}
+	scheduleAutoCandidates(99, candidates, testAutoScheduleConfig(0.2))
+	if _, ok := globalAutoSchedule.Load(99); !ok {
+		t.Fatal("expected schedule state to exist before reap")
+	}
+
+	AutoRankReap(time.Now().Add(time.Hour), 30*time.Minute)
+	if _, ok := globalAutoSchedule.Load(99); ok {
+		t.Fatal("expected idle schedule state to be reaped")
+	}
+}
+
+func TestAutoScheduleReconcilesRemovedCandidates(t *testing.T) {
+	AutoRankReset()
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m1"}, AutoRankStats{Samples: 20, SuccessConfidence: 0.95}, 95),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "m2"}, AutoRankStats{Samples: 20, SuccessConfidence: 0.95}, 95),
+	}
+	scheduleAutoCandidates(100, candidates, testAutoScheduleConfig(0))
+	RecordAutoDispatch(100, 1, "m1")
+	RecordAutoDispatch(100, 2, "m2")
+
+	scheduleAutoCandidates(100, candidates[:1], testAutoScheduleConfig(0))
+	remaining := GetAutoDispatchStats(100, 1, "m1")
+	if remaining.Rank != 1 || remaining.TargetShare != 1 || remaining.ActualShare != 1 {
+		t.Fatalf("expected single remaining candidate to own the schedule, got %+v", remaining)
+	}
+	if removed := GetAutoDispatchStats(100, 2, "m2"); removed != (AutoDispatchStats{}) {
+		t.Fatalf("expected removed candidate state to be cleared, got %+v", removed)
+	}
+}
+
+func testAutoScheduleConfig(exploreRatio float64) autoScheduleConfig {
+	return autoScheduleConfig{
+		ExploreRatio:    exploreRatio,
+		MinSamples:      3,
+		SuccessGap:      0.02,
+		LatencyRatio:    1.5,
+		ChannelMaxShare: 0.7,
+		ModelMaxShare:   0.8,
+	}
 }

@@ -2,7 +2,6 @@ package task
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -16,8 +15,15 @@ import (
 //
 // 数据来源为纯被动学习（真实请求），不发起任何主动探测——中转站通常拒绝
 // 无业务意图的极小请求（ping + 1 token）；冷启动/低流量候选由 balancer 的
-// epsilon 探索在真实流量中按比例获取样本。
+// 确定性有界探索在真实流量中按比例获取样本。
 func AutoRankTask() {
+	now := time.Now()
+	defer func() {
+		if reaped := balancer.AutoRankReap(now, 30*time.Minute); reaped > 0 {
+			log.Debugf("auto-rank reaped %d idle windows", reaped)
+		}
+	}()
+
 	enabled, err := op.SettingGetBool(model.SettingKeyAutoRankEnabled)
 	if err != nil || !enabled {
 		return
@@ -32,9 +38,14 @@ func AutoRankTask() {
 		return
 	}
 
-	statByKey := make(map[string]balancer.AutoRankStats)
+	type snapshotKey struct {
+		groupID   int
+		channelID int
+		modelName string
+	}
+	statByKey := make(map[snapshotKey]balancer.AutoRankStats)
 	for _, ks := range balancer.AutoRankAllStats() {
-		statByKey[fmt.Sprintf("%d:%s", ks.ChannelID, ks.ModelName)] = ks.Stats
+		statByKey[snapshotKey{groupID: ks.GroupID, channelID: ks.ChannelID, modelName: ks.ModelName}] = ks.Stats
 	}
 
 	var snaps []model.AutoRankSnapshot
@@ -43,7 +54,7 @@ func AutoRankTask() {
 			continue
 		}
 		for _, item := range group.Items {
-			st, ok := statByKey[fmt.Sprintf("%d:%s", item.ChannelID, item.ModelName)]
+			st, ok := statByKey[snapshotKey{groupID: group.ID, channelID: item.ChannelID, modelName: item.ModelName}]
 			if !ok {
 				continue
 			}
@@ -55,17 +66,13 @@ func AutoRankTask() {
 				Failures:      st.Failures,
 				SuccessRate:   st.SuccessRate,
 				EWMALatencyMS: st.EWMALatencyMS,
-				UpdatedAt:     time.Now(),
+				EWMATTFBMS:    st.EWMATTFBMS,
+				LastSeenAt:    st.LastSeenAt,
+				UpdatedAt:     now,
 			})
 		}
 	}
-	if len(snaps) > 0 {
-		if err := op.AutoRankSnapshotUpsertAll(ctx, snaps); err != nil {
-			log.Warnf("auto rank snapshot upsert failed: %v", err)
-		}
-	}
-
-	if reaped := balancer.AutoRankReap(time.Now(), 30*time.Minute); reaped > 0 {
-		log.Debugf("auto-rank reaped %d idle windows", reaped)
+	if err := op.AutoRankSnapshotReplaceAll(ctx, snaps); err != nil {
+		log.Warnf("auto rank snapshot replace failed: %v", err)
 	}
 }

@@ -125,6 +125,12 @@ func HandleResponsesCompact(c *gin.Context) {
 			iter.Skip(channel.ID, 0, channel.Name, "channel type not compatible with responses compact")
 			continue
 		}
+		candidateBody, err := responsesCompactBodyForModel(body, item.ModelName)
+		if err != nil {
+			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("failed to rewrite compact model: %v", err))
+			lastErr = err
+			continue
+		}
 
 		selectOpts := dbmodel.ChannelKeySelectOptions{
 			ExcludeKeyIDs:  make(map[int]struct{}),
@@ -153,6 +159,7 @@ func HandleResponsesCompact(c *gin.Context) {
 		var statusCode int
 		var retryAfter time.Duration
 		var success bool
+		candidateStartedAt := time.Now()
 
 		for retryNum := 0; retryNum < maxSameChannelRetries; retryNum++ {
 			if retryNum > 0 {
@@ -165,7 +172,7 @@ func HandleResponsesCompact(c *gin.Context) {
 				}
 			}
 
-			statusCode, retryAfter, attemptErr = forwardResponsesCompact(c, metrics, iter, channel, usedKey, body)
+			statusCode, retryAfter, attemptErr = forwardResponsesCompact(c, metrics, iter, channel, usedKey, item.ModelName, candidateBody)
 			if attemptErr == nil {
 				success = true
 				break
@@ -181,17 +188,21 @@ func HandleResponsesCompact(c *gin.Context) {
 
 		if success {
 			op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{RequestSuccess: 1})
-			balancer.RecordSuccess(channel.ID, usedKey.ID, requestModel)
+			balancer.RecordSuccess(channel.ID, usedKey.ID, item.ModelName)
 			balancer.SetSticky(apiKeyID, requestModel, channel.ID, usedKey.ID)
 			outlierwindow.Report(channel.ID, true, statusCode, time.Now())
+			recordAutoRankResult(group, channel.ID, item.ModelName, true, statusCode, time.Since(candidateStartedAt).Milliseconds(), 0)
 			metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
 			return
 		}
 
 		op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{RequestFailed: 1})
 		failureKind := circuitFailureKind(group.RetryEnabled, statusCode)
-		balancer.RecordFailure(channel.ID, usedKey.ID, requestModel, failureKind)
+		balancer.RecordFailure(channel.ID, usedKey.ID, item.ModelName, failureKind)
 		outlierwindow.Report(channel.ID, false, statusCode, time.Now())
+		if c.Request.Context().Err() == nil {
+			recordAutoRankResult(group, channel.ID, item.ModelName, false, statusCode, time.Since(candidateStartedAt).Milliseconds(), 0)
+		}
 		lastErr = attemptErr
 		lastStatusCode = statusCode
 		lastRetryAfter = retryAfter
@@ -225,8 +236,21 @@ func supportsResponsesCompact(channelType outbound.OutboundType) bool {
 	}
 }
 
-func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balancer.Iterator, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, requestBody []byte) (int, time.Duration, error) {
-	span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, metrics.RequestModel)
+func responsesCompactBodyForModel(requestBody []byte, modelName string) ([]byte, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(requestBody, &payload); err != nil {
+		return nil, err
+	}
+	encodedModel, err := json.Marshal(modelName)
+	if err != nil {
+		return nil, err
+	}
+	payload["model"] = encodedModel
+	return json.Marshal(payload)
+}
+
+func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balancer.Iterator, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, actualModel string, requestBody []byte) (int, time.Duration, error) {
+	span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, actualModel)
 	request, err := buildResponsesCompactRequest(c.Request.Context(), channel, usedKey.ChannelKey, requestBody)
 	if err != nil {
 		span.End(dbmodel.AttemptFailed, 0, err.Error())
@@ -264,7 +288,7 @@ func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balanc
 
 	var compactResp responsesCompactResponse
 	if err := json.Unmarshal(body, &compactResp); err == nil {
-		metrics.SetInternalResponse(compactResponseToInternalResponse(&compactResp), metrics.RequestModel, channel.ID)
+		metrics.SetInternalResponse(compactResponseToInternalResponse(&compactResp), actualModel, channel.ID)
 	}
 
 	span.End(dbmodel.AttemptSuccess, response.StatusCode, "")

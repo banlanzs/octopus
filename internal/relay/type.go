@@ -117,6 +117,7 @@ type relayAttempt struct {
 	firstTokenTimeOutSec int
 	firstTokenBudget     *firstTokenBudget
 	retryAfter           time.Duration // forward() 提取后暂存
+	firstTokenUnixNano   atomic.Int64
 }
 
 // attemptResult 封装单次尝试的结果
@@ -130,4 +131,5 @@ type attemptResult struct {
 	StatusCode        int           // 上游 HTTP 状态码（0 = 连接错误）
 	RetryAfter        time.Duration // 解析的 Retry-After 值
 	DurationMS        int64         // 本次尝试耗时（毫秒），供自动排序学习
+	TTFBMS            int64         // 首 Token 耗时；非流式或无独立信号时回退为完整耗时
 }

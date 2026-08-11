@@ -269,7 +269,7 @@
         },
         "autoRank": {
             "title": "自動排序（Auto 模式）",
-            "hint": "僅在分組切換為 Auto 模式時生效。基於真實請求效能（成功率+延遲）排序，冷啟動/低流量模型透過探索比例獲得採樣機會，樣本充足後參與正常排序。",
+            "hint": "僅在分組切換為 Auto 模式時生效。動態維護穩定、快速的候選優先列表，並在健康度接近時公平分配到不同渠道及渠道內模型。",
             "enabled": {
                 "label": "啟用自動排序",
                 "description": "關閉後 Auto 模式退化為按原設定順序轉發（不排序、不學習）。"
@@ -277,7 +277,7 @@
             "exploreRatio": {
                 "label": "探索比例（%）",
                 "placeholder": "20",
-                "description": "按該比例把欠採樣（含無樣本）候選提前嘗試，讓冷啟動模型累積樣本；多個欠採樣候選會隨機輪換。"
+                "description": "按該比例執行確定性有界探索；持續有流量時會依次覆蓋所有欠採樣候選，並週期複查已採樣候選。"
             },
             "minSamples": {
                 "label": "最小樣本數",
@@ -285,7 +285,7 @@
                 "description": "樣本達到該值後才按得分參與排序；不足時排在充分採樣候選之後。"
             },
             "interval": {
-                "label": "學習間隔（秒）",
+                "label": "快照與回收間隔（秒）",
                 "placeholder": "60",
                 "description": "後台控制面每該時間把統計快照落庫並回收過期視窗。"
             },
@@ -676,12 +676,15 @@
             "noHttpStatus": "無 HTTP 狀態",
             "autoRank": {
                 "title": "自動排序健康度",
-                "score": "分數",
+                "effectiveScore": "有效分數",
                 "successRate": "成功率",
                 "latency": "延遲",
+                "ttfb": "首 Token",
                 "samples": "採樣",
                 "failures": "失敗",
-                "empty": "暫無採樣（冷啟動，自動排序靠後）",
+                "rank": "動態排名",
+                "share": "目標 / 實際佔比",
+                "empty": "暫無採樣（等待確定性探索）",
                 "degradedHint": "渠道降級：視窗內多個模型同時惡化，該渠道得分被統一壓低",
                 "tripped": "渠道熔斷中",
                 "cooldown": "冷卻剩餘 {time}",

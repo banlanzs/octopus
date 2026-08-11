@@ -263,6 +263,8 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 
 		// 同通道重试循环
 		var result attemptResult
+		candidateStartedAt := time.Now()
+		var finalAttemptStartedAt time.Time
 		for retryNum := 0; retryNum < maxSameChannelRetries; retryNum++ {
 			// 重试前等待退避
 			if retryNum > 0 {
@@ -290,6 +292,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 				firstTokenTimeOutSec: group.FirstTokenTimeOut,
 			}
 
+			finalAttemptStartedAt = time.Now()
 			result = ra.attempt()
 			if result.Success || result.Written || result.Canceled || result.ResetConversation || result.FirstTokenTimeout || !isRetryableStatus(result.StatusCode) {
 				break
@@ -304,9 +307,8 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			// 统计口径过滤：仅渠道/Key 质量问题计入 AutoRank 失败样本。
 			// 客户端误用(404/415 等)、取消(499)、限流(429)、配额(596)等噪音不计，
 			// 避免"坏客户端把好渠道打残"（渠道聚合样本同样受益于模型窗口过滤）。
-			if isAutoRankCountableFailure(result.StatusCode) {
-				balancer.RecordAutoSample(channel.ID, internalRequest.Model, false, result.DurationMS)
-			}
+			durationMS, ttfbMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
+			recordAutoRankResult(group, channel.ID, internalRequest.Model, false, result.StatusCode, durationMS, ttfbMS)
 			// 渠道级冷却信号：仅渠道服务/网络问题计入渠道熔断（Key 级 401/403、429 不计）
 			if balancer.IsChannelLevelFailure(result.StatusCode) {
 				balancer.RecordChannelFailure(channel.ID, failureKind)
@@ -318,7 +320,8 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 
 		if result.Success {
 			outlierwindow.Report(channel.ID, true, result.StatusCode, time.Now())
-			balancer.RecordAutoSample(channel.ID, internalRequest.Model, true, result.DurationMS)
+			durationMS, ttfbMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
+			recordAutoRankResult(group, channel.ID, internalRequest.Model, true, result.StatusCode, durationMS, ttfbMS)
 			balancer.RecordChannelSuccess(channel.ID)
 
 			// === HTTP Replay 状态保存 ===
@@ -524,14 +527,14 @@ func (req *relayRequest) fallbackAttempt(item dbmodel.GroupItem, group dbmodel.G
 		usedKey:              usedKey,
 		firstTokenTimeOutSec: group.FirstTokenTimeOut,
 	}
+	startedAt := time.Now()
 	result := ra.attempt()
+	durationMS, ttfbMS := autoRankCandidateTimings(startedAt, startedAt, result)
 	if !result.Success && !result.Written && !result.Canceled && !result.ResetConversation {
 		failureKind := circuitFailureKind(group.RetryEnabled, result.StatusCode)
 		balancer.RecordFailure(channel.ID, usedKey.ID, req.internalRequest.Model, failureKind)
 		outlierwindow.Report(channel.ID, false, result.StatusCode, time.Now())
-		if isAutoRankCountableFailure(result.StatusCode) {
-			balancer.RecordAutoSample(channel.ID, req.internalRequest.Model, false, result.DurationMS)
-		}
+		recordAutoRankResult(group, channel.ID, req.internalRequest.Model, false, result.StatusCode, durationMS, ttfbMS)
 		if balancer.IsChannelLevelFailure(result.StatusCode) {
 			balancer.RecordChannelFailure(channel.ID, failureKind)
 		}
@@ -540,7 +543,7 @@ func (req *relayRequest) fallbackAttempt(item dbmodel.GroupItem, group dbmodel.G
 		}
 	} else if result.Success {
 		outlierwindow.Report(channel.ID, true, result.StatusCode, time.Now())
-		balancer.RecordAutoSample(channel.ID, req.internalRequest.Model, true, result.DurationMS)
+		recordAutoRankResult(group, channel.ID, req.internalRequest.Model, true, result.StatusCode, durationMS, ttfbMS)
 		balancer.RecordChannelSuccess(channel.ID)
 	}
 	return result, true
@@ -548,6 +551,7 @@ func (req *relayRequest) fallbackAttempt(item dbmodel.GroupItem, group dbmodel.G
 
 // attempt 统一管理一次通道尝试的完整生命周期
 func (ra *relayAttempt) attempt() attemptResult {
+	startedAt := time.Now()
 	span := ra.iter.StartAttempt(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, ra.internalRequest.Model)
 
 	// 转发请求
@@ -577,7 +581,8 @@ func (ra *relayAttempt) attempt() attemptResult {
 		// 会话保持：更新粘性记录
 		balancer.SetSticky(ra.apiKeyID, ra.requestModel, ra.channel.ID, ra.usedKey.ID)
 
-		return attemptResult{Success: true, DurationMS: span.Duration().Milliseconds()}
+		durationMS := span.Duration().Milliseconds()
+		return attemptResult{Success: true, DurationMS: durationMS, TTFBMS: ra.autoRankTTFBMS(startedAt, durationMS)}
 	}
 
 	// ====== 失败 ======
@@ -595,6 +600,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 			Err:        fwdErr,
 			StatusCode: statusCode,
 			DurationMS: span.Duration().Milliseconds(),
+			TTFBMS:     ra.autoRankTTFBMS(startedAt, span.Duration().Milliseconds()),
 		}
 	}
 
@@ -624,6 +630,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 		StatusCode:        statusCode,
 		RetryAfter:        ra.retryAfter,
 		DurationMS:        span.Duration().Milliseconds(),
+		TTFBMS:            ra.autoRankTTFBMS(startedAt, span.Duration().Milliseconds()),
 	}
 }
 
@@ -909,7 +916,7 @@ func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *ws
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
 		OnFirstToken: func() {
-			ra.metrics.SetFirstTokenTime(time.Now())
+			ra.markFirstToken()
 			ra.stopFirstTokenTimer()
 		},
 	})
@@ -1269,7 +1276,7 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
 		OnFirstToken: func() {
-			ra.metrics.SetFirstTokenTime(time.Now())
+			ra.markFirstToken()
 			ra.stopFirstTokenTimer()
 		},
 	})
@@ -1334,7 +1341,7 @@ func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, r
 		RequireTerminalEvent:  cfg.RequireTerminalEvent,
 		IncompleteStreamEvent: cfg.IncompleteStreamEvent,
 		OnFirstToken: func() {
-			ra.metrics.SetFirstTokenTime(time.Now())
+			ra.markFirstToken()
 			ra.stopFirstTokenTimer()
 		},
 		OnFinish: func(ctx context.Context, rawStream []byte) error {

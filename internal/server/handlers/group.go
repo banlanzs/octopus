@@ -7,6 +7,7 @@ import (
 	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/server/middleware"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
@@ -41,6 +42,17 @@ func getGroupList(c *gin.Context) {
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	for groupIndex := range groups {
+		if groups[groupIndex].Mode != model.GroupModeAuto {
+			continue
+		}
+		groups[groupIndex].Items = append([]model.GroupItem(nil), groups[groupIndex].Items...)
+		for itemIndex := range groups[groupIndex].Items {
+			item := &groups[groupIndex].Items[itemIndex]
+			health := balancer.AutoRankHealthForGroupItems(groups[groupIndex].ID, item.ChannelID, item.ModelName, groups[groupIndex].Items)
+			item.AutoRank = &health
+		}
 	}
 	resp.Success(c, groups)
 }

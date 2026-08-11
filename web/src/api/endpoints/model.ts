@@ -76,10 +76,27 @@ export interface AutoRankHealth {
     failures: number;
     /** 窗口成功率 0~1 */
     success_rate: number;
+    /** Wilson 成功率置信下界 0~1 */
+    success_confidence: number;
     /** EWMA 平滑延迟（毫秒） */
     ewma_latency_ms: number;
-    /** 基础排序得分：成功率*100 - 延迟(秒) */
+    /** EWMA 首 Token 延迟（毫秒） */
+    ewma_ttfb_ms: number;
+    /** 基础排序得分：成功率置信下界*100 - 延迟(秒) */
     score: number;
+    /** 应用渠道聚合与相对 TTFB 修正后的分数 */
+    effective_score: number;
+    /** 当前动态优先列表排名（1-based） */
+    rank: number;
+    /** 采样档位：0 冷启动、1 欠采样、2 样本充分 */
+    tier: number;
+    /** 公平调度目标占比 0~1 */
+    target_share: number;
+    /** 进程内实际转发占比 0~1 */
+    actual_share: number;
+    last_sample_at: string;
+    last_dispatched_at: string;
+    selection_reason: string;
     /** 渠道是否处于聚合惩罚（多模型同时恶化，得分被统一压低） */
     degraded: boolean;
     /** 渠道级熔断是否生效 */

@@ -111,6 +111,7 @@ export function GroupCard({ group }: { group: Group }) {
                     channel_name: modelChannel?.channel_name ?? `Channel ${item.channel_id}`,
                     item_id: item.id,
                     weight: item.weight,
+                    auto_rank: item.auto_rank ?? modelChannel?.auto_rank,
                 };
             }),
         [group.items, modelChannelByKey]

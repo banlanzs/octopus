@@ -547,6 +547,8 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 			req.requestModel, channel.Name, item.ModelName, req.iter.Index()+1, req.iter.Len())
 
 		var result attemptResult
+		candidateStartedAt := time.Now()
+		var finalAttemptStartedAt time.Time
 		for retryNum := 0; retryNum < maxSameChannelRetries; retryNum++ {
 			if retryNum > 0 {
 				delay := computeBackoff(retryNum, result.RetryAfter)
@@ -573,6 +575,7 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 				firstTokenTimeOutSec: group.FirstTokenTimeOut,
 			}
 
+			finalAttemptStartedAt = time.Now()
 			result = ra.attempt()
 			if result.Success || result.Written || result.Canceled || result.ResetConversation || !isRetryableStatus(result.StatusCode) {
 				break
@@ -585,9 +588,13 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 				failureKind = balancer.FailureHard
 			}
 			balancer.RecordFailure(channel.ID, usedKey.ID, req.internalRequest.Model, failureKind)
+			durationMS, ttfbMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
+			recordAutoRankResult(*group, channel.ID, item.ModelName, false, result.StatusCode, durationMS, ttfbMS)
 		}
 
 		if result.Success {
+			durationMS, ttfbMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
+			recordAutoRankResult(*group, channel.ID, item.ModelName, true, result.StatusCode, durationMS, ttfbMS)
 			var respID string
 			if req.metrics.InternalResponse != nil {
 				respID = req.metrics.InternalResponse.ID

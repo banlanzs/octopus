@@ -32,14 +32,14 @@ function formatCooldown(sec: number): string {
     return `${min}m${rest}s`;
 }
 
-// HealthBadge 展示 (渠道, 模型) 的自动排序健康度摘要：渠道熔断（红）、
-// 渠道降级（琥珀）、有采样则显示成功率，无采样显示冷启动占位。
+// HealthBadge 展示 (渠道, 模型) 的自动排序健康度摘要。
 function HealthBadge({ rank }: { rank: AutoRankHealth }) {
     const t = useTranslations('group.health.autoRank');
 
     const tripped = rank.channel_tripped;
     const degraded = rank.degraded;
     const hasSamples = rank.samples > 0;
+    const hasSchedule = rank.rank > 0;
 
     let label: string;
     let tone: string;
@@ -49,6 +49,9 @@ function HealthBadge({ rank }: { rank: AutoRankHealth }) {
     } else if (degraded) {
         label = '↓';
         tone = 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400';
+    } else if (hasSchedule) {
+        label = `#${rank.rank}`;
+        tone = 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300';
     } else if (hasSamples) {
         const pct = Math.round(rank.success_rate * 100);
         label = `${pct}%`;
@@ -84,7 +87,8 @@ function HealthBadge({ rank }: { rank: AutoRankHealth }) {
                     {hasSamples ? (
                         <>
                             <span>
-                                {t('score')}: <span className="font-medium">{rank.score.toFixed(1)}</span>
+                                {t('effectiveScore')}:{' '}
+                                <span className="font-medium">{rank.effective_score.toFixed(1)}</span>
                             </span>
                             <span>
                                 {t('successRate')}: <span className="font-medium">{(rank.success_rate * 100).toFixed(1)}%</span>
@@ -93,12 +97,28 @@ function HealthBadge({ rank }: { rank: AutoRankHealth }) {
                                 {t('latency')}: <span className="font-medium">{Math.round(rank.ewma_latency_ms)}ms</span>
                             </span>
                             <span>
+                                {t('ttfb')}: <span className="font-medium">{Math.round(rank.ewma_ttfb_ms)}ms</span>
+                            </span>
+                            <span>
                                 {t('samples')}: <span className="font-medium">{rank.samples}</span>（{t('failures')}{' '}
                                 {rank.failures}）
                             </span>
                         </>
                     ) : (
                         <span className="text-muted-foreground">{t('empty')}</span>
+                    )}
+                    {hasSchedule && (
+                        <>
+                            <span>
+                                {t('rank')}: <span className="font-medium">#{rank.rank}</span>
+                            </span>
+                            <span>
+                                {t('share')}:{' '}
+                                <span className="font-medium">
+                                    {(rank.target_share * 100).toFixed(1)}% / {(rank.actual_share * 100).toFixed(1)}%
+                                </span>
+                            </span>
+                        </>
                     )}
                     {degraded && <span className="text-amber-600 dark:text-amber-400">{t('degradedHint')}</span>}
                     {tripped && (

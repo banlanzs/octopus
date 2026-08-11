@@ -5,7 +5,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
-	"gorm.io/gorm/clause"
+	"gorm.io/gorm"
 )
 
 // AutoRankSnapshotListAll 读取全部自动排序性能快照（启动时恢复内存窗口用）。
@@ -17,20 +17,16 @@ func AutoRankSnapshotListAll(ctx context.Context) ([]model.AutoRankSnapshot, err
 	return snaps, nil
 }
 
-// AutoRankSnapshotUpsertAll 批量 upsert 性能快照。
-// 控制面任务周期性调用；键为 (group_id, channel_id, model_name)。
-func AutoRankSnapshotUpsertAll(ctx context.Context, snaps []model.AutoRankSnapshot) error {
-	if len(snaps) == 0 {
-		return nil
-	}
-	return db.GetDB().WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "group_id"},
-			{Name: "channel_id"},
-			{Name: "model_name"},
-		},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"samples", "failures", "success_rate", "ewma_latency_ms", "updated_at",
-		}),
-	}).Create(&snaps).Error
+// AutoRankSnapshotReplaceAll 原子替换全部性能快照。
+// 控制面内存窗口是事实源；整体替换同时清理已删除分组与已移除成员的陈旧行。
+func AutoRankSnapshotReplaceAll(ctx context.Context, snaps []model.AutoRankSnapshot) error {
+	return db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.AutoRankSnapshot{}).Error; err != nil {
+			return err
+		}
+		if len(snaps) == 0 {
+			return nil
+		}
+		return tx.Create(&snaps).Error
+	})
 }
