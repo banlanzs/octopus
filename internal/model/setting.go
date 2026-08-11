@@ -52,6 +52,16 @@ const (
 	SettingKeyAutoRankTTFBWeight               SettingKey = "auto_rank_ttfb_weight"                 // 相对 TTFB 惩罚权重（×慢速比）
 	SettingKeyAutoRankTTFBMaxSlowRatio         SettingKey = "auto_rank_ttfb_max_slow_ratio"         // TTFB 慢速比 (s-1) 上限(百分比)
 	SettingKeyAutoRankTTFBMinConfidentSample   SettingKey = "auto_rank_ttfb_min_confident_sample"   // TTFB 惩罚置信样本量阈值
+	SettingKeyAutoRankSuccessGap               SettingKey = "auto_rank_success_gap"                 // 竞技池准入：与最佳候选的成功率差距门槛(百分比)
+	SettingKeyAutoRankLatencyRatio             SettingKey = "auto_rank_latency_ratio"               // 竞技池准入：与最佳候选的延迟倍率门槛(百分比)
+	SettingKeyAutoRankHealthThreshold          SettingKey = "auto_rank_health_threshold"            // 竞技池准入：绝对健康度阈值(Wilson 下界，百分比)
+	SettingKeyAutoRankChannelMaxShare          SettingKey = "auto_rank_channel_max_share"           // 公平调度：单渠道目标份额上限(百分比)
+	SettingKeyAutoRankModelMaxShare            SettingKey = "auto_rank_model_max_share"             // 公平调度：单渠道内单模型目标份额上限(百分比)
+	SettingKeyAutoRankSoftmaxTemp              SettingKey = "auto_rank_softmax_temp"                // 公平调度：softmax 温度(×10 存储，50=5.0)
+	SettingKeyAutoRankFeedbackEnabled          SettingKey = "auto_rank_feedback_enabled"            // 实际分配反馈纠偏开关（基于 dispatched 的 EWMA actualShare）
+	SettingKeyAutoRankFeedbackEwma             SettingKey = "auto_rank_feedback_ewma"               // 反馈纠偏：actualShare EWMA 新样本权重(百分比)
+	SettingKeyAutoRankFeedbackTolerance        SettingKey = "auto_rank_feedback_tolerance"          // 反馈纠偏：actualShare 超额容忍度(百分比)
+	SettingKeyAutoRankFeedbackPenalty          SettingKey = "auto_rank_feedback_penalty"            // 反馈纠偏：超额降权强度(百分比)
 	SettingKeyApiBaseUrl                       SettingKey = "api_base_url"                         // 对外服务基础地址，用于一键导出客户端配置，为空时不显示导出入口
 	SettingKeyWebDAVURL                        SettingKey = "webdav_url"                            // WebDAV 服务器地址
 	SettingKeyWebDAVUsername                   SettingKey = "webdav_username"                       // WebDAV 用户名
@@ -112,6 +122,16 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyAutoRankTTFBWeight, Value: "20"},             // TTFB 惩罚权重 20
 		{Key: SettingKeyAutoRankTTFBMaxSlowRatio, Value: "200"},      // 慢速比上限 2.0
 		{Key: SettingKeyAutoRankTTFBMinConfidentSample, Value: "10"}, // TTFB 置信样本 10
+		{Key: SettingKeyAutoRankSuccessGap, Value: "2"},              // 成功率差距门槛 2%（=0.02）
+		{Key: SettingKeyAutoRankLatencyRatio, Value: "150"},          // 延迟倍率门槛 1.5
+		{Key: SettingKeyAutoRankHealthThreshold, Value: "85"},        // 绝对健康度阈值 0.85（Wilson 下界）
+		{Key: SettingKeyAutoRankChannelMaxShare, Value: "70"},        // 单渠道份额上限 70%
+		{Key: SettingKeyAutoRankModelMaxShare, Value: "80"},          // 单渠道内单模型份额上限 80%
+		{Key: SettingKeyAutoRankSoftmaxTemp, Value: "50"},            // softmax 温度 5.0（×10 存储）
+		{Key: SettingKeyAutoRankFeedbackEnabled, Value: "true"},      // 默认启用实际分配反馈纠偏
+		{Key: SettingKeyAutoRankFeedbackEwma, Value: "30"},           // EWMA 新样本权重 0.3
+		{Key: SettingKeyAutoRankFeedbackTolerance, Value: "10"},      // 超额容忍度 0.10
+		{Key: SettingKeyAutoRankFeedbackPenalty, Value: "30"},        // 超额降权强度 0.30/单位超额
 		{Key: SettingKeyApiBaseUrl, Value: ""},                  // 默认为空，不显示客户端导出入口
 		{Key: SettingKeyWebDAVURL, Value: ""},                   // 默认为空，未配置
 		{Key: SettingKeyWebDAVUsername, Value: ""},              // 默认为空
@@ -147,7 +167,10 @@ func (s *Setting) Validate() error {
 		SettingKeyWebDAVRetentionCount:
 		// 时间窗/样本/连击/间隔等：0 或负值无意义，下限为 1。
 		return validateIntMin(s.Value, 1)
-	case SettingKeyAutoRankExploreRatio, SettingKeyAutoRankChannelDegradeRate, SettingKeyAutoRankTTFBMaxSlowRatio:
+	case SettingKeyAutoRankExploreRatio, SettingKeyAutoRankChannelDegradeRate, SettingKeyAutoRankTTFBMaxSlowRatio,
+		SettingKeyAutoRankSuccessGap, SettingKeyAutoRankHealthThreshold,
+		SettingKeyAutoRankChannelMaxShare, SettingKeyAutoRankModelMaxShare,
+		SettingKeyAutoRankFeedbackTolerance, SettingKeyAutoRankFeedbackPenalty:
 		// 比例类取百分比，允许 0（纯贪婪）到 100（全探索）。
 		return validateIntRange(s.Value, 0, 100)
 	case SettingKeyAutoRankTTFBWeight:
@@ -158,6 +181,15 @@ func (s *Setting) Validate() error {
 		return validateIntMin(s.Value, 2)
 	case SettingKeyAutoRankTTFBMinConfidentSample:
 		return validateIntMin(s.Value, 1)
+	case SettingKeyAutoRankLatencyRatio:
+		// 延迟倍率门槛必须 ≥1.0（1.0 表示不允许任何延迟差异）。
+		return validateIntMin(s.Value, 100)
+	case SettingKeyAutoRankSoftmaxTemp:
+		// softmax 温度 ×10 存储（50=5.0），下限 10（=1.0），防止用户设 T<1 导致赢家通吃。
+		return validateIntMin(s.Value, 10)
+	case SettingKeyAutoRankFeedbackEwma:
+		// EWMA 新样本权重必须 <1.0（存百分比 1-99），避免 alpha=1 时完全丢弃历史。
+		return validateIntRange(s.Value, 1, 99)
 	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval:
 		value, err := strconv.Atoi(s.Value)
 		if err != nil {
@@ -167,7 +199,7 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("setting value must be non-negative")
 		}
 		return nil
-	case SettingKeyRelayLogKeepEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoRankEnabled, SettingKeyAutoRankChannelFactorEnabled, SettingKeyAutoRankTTFBEnabled, SettingKeyWebDAVIncludeStats:
+	case SettingKeyRelayLogKeepEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoRankEnabled, SettingKeyAutoRankChannelFactorEnabled, SettingKeyAutoRankTTFBEnabled, SettingKeyAutoRankFeedbackEnabled, SettingKeyWebDAVIncludeStats:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("setting value must be true or false")
 		}

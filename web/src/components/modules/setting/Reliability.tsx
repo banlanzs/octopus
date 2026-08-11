@@ -54,6 +54,7 @@ export function SettingReliability() {
     const autoRank = useSettingToggle(SettingKey.AutoRankEnabled);
     const channelFactor = useSettingToggle(SettingKey.AutoRankChannelFactorEnabled);
     const ttfb = useSettingToggle(SettingKey.AutoRankTTFBEnabled);
+    const feedback = useSettingToggle(SettingKey.AutoRankFeedbackEnabled);
 
     return (
         <SettingCard icon={ShieldCheck} title={t('reliability.title')}>
@@ -189,6 +190,94 @@ export function SettingReliability() {
                                 placeholder={t('autoRank.ttfbMinConfidentSample.placeholder')}
                                 icon={Gauge}
                                 min={1}
+                            />
+                        </>
+                    )}
+
+                    {/* 公平调度门槛：竞技池准入与份额上限 */}
+                    <SettingSection title={t('autoRank.thresholds.title')} tooltip={t('autoRank.thresholds.hint')} />
+                    <NumberFieldRow
+                        settingKey={SettingKey.AutoRankSuccessGap}
+                        label={t('autoRank.successGap.label')}
+                        placeholder={t('autoRank.successGap.placeholder')}
+                        tooltip={t('autoRank.successGap.description')}
+                        icon={Gauge}
+                        min={0}
+                        max={100}
+                    />
+                    <NumberFieldRow
+                        settingKey={SettingKey.AutoRankLatencyRatio}
+                        label={t('autoRank.latencyRatio.label')}
+                        placeholder={t('autoRank.latencyRatio.placeholder')}
+                        tooltip={t('autoRank.latencyRatio.description')}
+                        icon={Gauge}
+                        min={100}
+                    />
+                    <NumberFieldRow
+                        settingKey={SettingKey.AutoRankHealthThreshold}
+                        label={t('autoRank.healthThreshold.label')}
+                        placeholder={t('autoRank.healthThreshold.placeholder')}
+                        tooltip={t('autoRank.healthThreshold.description')}
+                        icon={Gauge}
+                        min={0}
+                        max={100}
+                    />
+                    <NumberFieldRow
+                        settingKey={SettingKey.AutoRankChannelMaxShare}
+                        label={t('autoRank.channelMaxShare.label')}
+                        placeholder={t('autoRank.channelMaxShare.placeholder')}
+                        tooltip={t('autoRank.channelMaxShare.description')}
+                        icon={Gauge}
+                        min={1}
+                        max={100}
+                    />
+                    <NumberFieldRow
+                        settingKey={SettingKey.AutoRankModelMaxShare}
+                        label={t('autoRank.modelMaxShare.label')}
+                        placeholder={t('autoRank.modelMaxShare.placeholder')}
+                        tooltip={t('autoRank.modelMaxShare.description')}
+                        icon={Gauge}
+                        min={1}
+                        max={100}
+                    />
+                    <NumberFieldRow
+                        settingKey={SettingKey.AutoRankSoftmaxTemp}
+                        label={t('autoRank.softmaxTemp.label')}
+                        placeholder={t('autoRank.softmaxTemp.placeholder')}
+                        tooltip={t('autoRank.softmaxTemp.description')}
+                        icon={Gauge}
+                        min={10}
+                    />
+
+                    {/* 实际分配反馈纠偏 */}
+                    <SettingRow label={t('autoRank.feedback.label')} tooltip={t('autoRank.feedback.description')}>
+                        <Switch checked={feedback.enabled} onCheckedChange={feedback.toggle} />
+                    </SettingRow>
+                    {feedback.enabled && (
+                        <>
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankFeedbackEwma}
+                                label={t('autoRank.feedbackEwma.label')}
+                                placeholder={t('autoRank.feedbackEwma.placeholder')}
+                                icon={Gauge}
+                                min={1}
+                                max={99}
+                            />
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankFeedbackTolerance}
+                                label={t('autoRank.feedbackTolerance.label')}
+                                placeholder={t('autoRank.feedbackTolerance.placeholder')}
+                                icon={Gauge}
+                                min={0}
+                                max={100}
+                            />
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankFeedbackPenalty}
+                                label={t('autoRank.feedbackPenalty.label')}
+                                placeholder={t('autoRank.feedbackPenalty.placeholder')}
+                                icon={Gauge}
+                                min={0}
+                                max={100}
                             />
                         </>
                     )}

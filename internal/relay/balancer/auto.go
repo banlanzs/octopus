@@ -84,6 +84,120 @@ func autoRankExploreRatio() float64 {
 	return float64(pct) / 100.0
 }
 
+// autoRankSuccessGap 返回竞技池成功率差距门槛（0~1）。读取 auto_rank_success_gap（百分比）。
+func autoRankSuccessGap() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankSuccessGap)
+	if err != nil {
+		return defaultAutoSuccessGap
+	}
+	return clampPct(pct, defaultAutoSuccessGap)
+}
+
+// autoRankLatencyRatio 返回竞技池延迟倍率门槛（≥1）。读取 auto_rank_latency_ratio（百分比）。
+func autoRankLatencyRatio() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankLatencyRatio)
+	if err != nil {
+		return defaultAutoLatencyRatio
+	}
+	if pct < 100 {
+		return defaultAutoLatencyRatio
+	}
+	return float64(pct) / 100.0
+}
+
+// autoRankHealthThreshold 返回竞技池绝对健康度阈值（Wilson 下界，0~1）。
+// 读取 auto_rank_health_threshold（百分比）。0 表示禁用绝对通道（退化纯相对差距判据）。
+func autoRankHealthThreshold() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankHealthThreshold)
+	if err != nil {
+		return 0.85
+	}
+	if pct < 0 {
+		return 0.85
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return float64(pct) / 100.0
+}
+
+// autoRankChannelMaxShare 返回单渠道目标份额上限（0~1）。读取 auto_rank_channel_max_share（百分比）。
+func autoRankChannelMaxShare() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankChannelMaxShare)
+	if err != nil {
+		return defaultAutoChannelMaxShare
+	}
+	return clampPct(pct, defaultAutoChannelMaxShare)
+}
+
+// autoRankModelMaxShare 返回单渠道内单模型目标份额上限（0~1）。读取 auto_rank_model_max_share（百分比）。
+func autoRankModelMaxShare() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankModelMaxShare)
+	if err != nil {
+		return defaultAutoModelMaxShare
+	}
+	return clampPct(pct, defaultAutoModelMaxShare)
+}
+
+// autoRankSoftmaxTemp 返回公平调度 softmax 温度（×10 存储）。读取 auto_rank_softmax_temp。
+func autoRankSoftmaxTemp() float64 {
+	v, err := op.SettingGetInt(model.SettingKeyAutoRankSoftmaxTemp)
+	if err != nil {
+		return autoSoftmaxTemperature
+	}
+	if v < 10 {
+		return autoSoftmaxTemperature
+	}
+	return float64(v) / 10.0
+}
+
+// autoRankFeedbackEnabled 返回实际分配反馈纠偏开关。
+func autoRankFeedbackEnabled() bool {
+	enabled, err := op.SettingGetBool(model.SettingKeyAutoRankFeedbackEnabled)
+	return err == nil && enabled
+}
+
+// autoRankFeedbackEwma 返回 actualShare EWMA 新样本权重（0~1）。读取 auto_rank_feedback_ewma（百分比）。
+func autoRankFeedbackEwma() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankFeedbackEwma)
+	if err != nil {
+		return 0.3
+	}
+	if pct < 1 || pct > 99 {
+		return 0.3
+	}
+	return float64(pct) / 100.0
+}
+
+// autoRankFeedbackTolerance 返回 actualShare 超额容忍度（0~1）。读取 auto_rank_feedback_tolerance（百分比）。
+func autoRankFeedbackTolerance() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankFeedbackTolerance)
+	if err != nil {
+		return 0.1
+	}
+	return clampPct(pct, 0.1)
+}
+
+// autoRankFeedbackPenalty 返回超额降权强度（0~1/单位超额）。读取 auto_rank_feedback_penalty（百分比）。
+func autoRankFeedbackPenalty() float64 {
+	pct, err := op.SettingGetInt(model.SettingKeyAutoRankFeedbackPenalty)
+	if err != nil {
+		return 0.3
+	}
+	return clampPct(pct, 0.3)
+}
+
+// clampPct 把百分比整数钳制到 [0,100] 并转 0~1 浮点。
+func clampPct(pct int, def float64) float64 {
+	if pct < 0 {
+		return def
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return float64(pct) / 100.0
+}
+
 type autoRankSample struct {
 	at      time.Time
 	success bool

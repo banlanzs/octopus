@@ -320,6 +320,56 @@
             "ttfbMinConfidentSample": {
                 "label": "Confidence sample count",
                 "placeholder": "10"
+            },
+            "thresholds": {
+                "title": "Fair scheduling thresholds",
+                "hint": "Competitive pool admission and share caps to prevent a single channel or in-channel model from monopolizing traffic long-term."
+            },
+            "successGap": {
+                "label": "Success gap threshold (%)",
+                "placeholder": "2",
+                "description": "Pool admission: candidates within this gap of the best candidate's success rate (Wilson lower bound) are relatively eligible."
+            },
+            "latencyRatio": {
+                "label": "Latency ratio threshold (%)",
+                "placeholder": "150",
+                "description": "Pool admission: candidates slower than the best by more than this ratio are relatively ineligible."
+            },
+            "healthThreshold": {
+                "label": "Absolute health threshold (%)",
+                "placeholder": "85",
+                "description": "Pool admission: candidates whose success rate (Wilson lower bound) reaches this value enter fair scheduling unconditionally, even with better candidates present. 0 disables the absolute channel."
+            },
+            "channelMaxShare": {
+                "label": "Channel max share (%)",
+                "placeholder": "70",
+                "description": "Fair scheduling: cap on a single channel's share of target allocation, preventing channel-level monopoly."
+            },
+            "modelMaxShare": {
+                "label": "Model max share (%)",
+                "placeholder": "80",
+                "description": "Fair scheduling: cap on a single model's share within a channel, preventing in-channel model monopoly."
+            },
+            "softmaxTemp": {
+                "label": "Softmax temperature (×0.1)",
+                "placeholder": "50",
+                "description": "Fair scheduling: softmax allocation temperature. Lower favors the best candidate more sharply; higher spreads traffic more evenly. Default 5.0 (stored as 50)."
+            },
+            "feedback": {
+                "label": "Actual-share feedback correction",
+                "description": "Downgrades over-allocated candidates/channels based on real dispatched share (EWMA), accelerating correction of short-term monopoly."
+            },
+            "feedbackEwma": {
+                "label": "EWMA new-sample weight (%)",
+                "placeholder": "30"
+            },
+            "feedbackTolerance": {
+                "label": "Overshoot tolerance (%)",
+                "placeholder": "10"
+            },
+            "feedbackPenalty": {
+                "label": "Overshoot penalty strength (%)",
+                "placeholder": "30"
             }
         },
         "saved": "Saved",

@@ -15,6 +15,12 @@ const (
 	defaultAutoChannelMaxShare = 0.70
 	defaultAutoModelMaxShare   = 0.80
 	autoSoftmaxTemperature     = 5.0
+	// feedbackMin 是 feedbackPenalty 的地板系数：adjustedTarget 不低于 target×feedbackMin，
+	// 防止实际分配反馈把某候选完全斩断。
+	feedbackMin = 0.5
+	// feedbackUpdateInterval 是 EWMA 实际份额更新的触发间隔（每次组内该次数转发后更新一轮）。
+	// 不暴露为 setting，测试可通过 autoScheduleConfig.FeedbackUpdateInterval 覆盖。
+	feedbackUpdateInterval = 10
 )
 
 type autoScheduleConfig struct {
@@ -24,16 +30,31 @@ type autoScheduleConfig struct {
 	LatencyRatio    float64
 	ChannelMaxShare float64
 	ModelMaxShare   float64
+	SoftmaxTemp     float64 // 竞技池/公平调度 softmax 温度
+	HealthThreshold float64 // 竞技池准入：绝对健康度阈值（Wilson 下界）
+	// 实际分配反馈纠偏（基于 dispatched 的 EWMA actualShare）
+	FeedbackEnabled        bool
+	FeedbackEwma           float64 // EWMA 新样本权重
+	FeedbackTolerance      float64 // 超额容忍度：ewmaActualShare 超过 targetShare 此值才降权
+	FeedbackPenalty        float64 // 超额降权强度：1.0 - 超标量×此值
+	FeedbackUpdateInterval int     // EWMA 更新触发间隔（组内转发次数）
 }
 
 func defaultAutoScheduleConfig() autoScheduleConfig {
 	return autoScheduleConfig{
-		ExploreRatio:    autoRankExploreRatio(),
-		MinSamples:      autoRankMinSamples(),
-		SuccessGap:      defaultAutoSuccessGap,
-		LatencyRatio:    defaultAutoLatencyRatio,
-		ChannelMaxShare: defaultAutoChannelMaxShare,
-		ModelMaxShare:   defaultAutoModelMaxShare,
+		ExploreRatio:            autoRankExploreRatio(),
+		MinSamples:              autoRankMinSamples(),
+		SuccessGap:              autoRankSuccessGap(),
+		LatencyRatio:            autoRankLatencyRatio(),
+		ChannelMaxShare:         autoRankChannelMaxShare(),
+		ModelMaxShare:           autoRankModelMaxShare(),
+		SoftmaxTemp:             autoRankSoftmaxTemp(),
+		HealthThreshold:         autoRankHealthThreshold(),
+		FeedbackEnabled:         autoRankFeedbackEnabled(),
+		FeedbackEwma:            autoRankFeedbackEwma(),
+		FeedbackTolerance:       autoRankFeedbackTolerance(),
+		FeedbackPenalty:         autoRankFeedbackPenalty(),
+		FeedbackUpdateInterval:  feedbackUpdateInterval,
 	}
 }
 
@@ -57,6 +78,10 @@ type autoDispatchState struct {
 	rank           int
 	tier           int
 	reason         string
+	// 实际分配反馈纠偏状态（仅 feedbackEnabled 时使用）
+	ewmaActualShare  float64 // EWMA 平滑的实际份额（基于 dispatched 的真实转发）
+	feedbackPenalty  float64 // 当前降权系数：1.0=无惩罚，<1.0=降权，地板 feedbackMin
+	activeDispatched uint64  // 自上次 EWMA 更新以来的 dispatched 计数
 }
 
 type autoGroupScheduleState struct {
@@ -68,6 +93,8 @@ type autoGroupScheduleState struct {
 	lastSeen        time.Time
 	candidates      map[string]*autoDispatchState
 	channelOffered  map[int]uint64
+	// 实际分配反馈纠偏状态
+	totalActiveDispatched uint64 // 自上次 EWMA 更新以来全组 dispatched（与 activeDispatched 配对计算份额）
 }
 
 var globalAutoSchedule sync.Map // key: groupID -> *autoGroupScheduleState
@@ -81,8 +108,9 @@ func getOrCreateAutoSchedule(groupID int) *autoGroupScheduleState {
 		return v.(*autoGroupScheduleState)
 	}
 	s := &autoGroupScheduleState{
-		candidates:     make(map[string]*autoDispatchState),
-		channelOffered: make(map[int]uint64),
+		candidates:            make(map[string]*autoDispatchState),
+		channelOffered:        make(map[int]uint64),
+		totalActiveDispatched: 0,
 	}
 	actual, _ := globalAutoSchedule.LoadOrStore(groupID, s)
 	return actual.(*autoGroupScheduleState)
@@ -103,6 +131,21 @@ func scheduleAutoCandidates(groupID int, input []autoCandidate, cfg autoSchedule
 	}
 	if cfg.ModelMaxShare <= 0 || cfg.ModelMaxShare > 1 {
 		cfg.ModelMaxShare = defaultAutoModelMaxShare
+	}
+	if cfg.SoftmaxTemp <= 0 {
+		cfg.SoftmaxTemp = autoSoftmaxTemperature
+	}
+	if cfg.FeedbackEwma <= 0 || cfg.FeedbackEwma >= 1 {
+		cfg.FeedbackEwma = 0.3
+	}
+	if cfg.FeedbackTolerance < 0 {
+		cfg.FeedbackTolerance = 0.1
+	}
+	if cfg.FeedbackPenalty <= 0 {
+		cfg.FeedbackPenalty = 0.3
+	}
+	if cfg.FeedbackUpdateInterval <= 0 {
+		cfg.FeedbackUpdateInterval = feedbackUpdateInterval
 	}
 
 	candidates := append([]autoCandidate(nil), input...)
@@ -146,6 +189,12 @@ func scheduleAutoCandidates(groupID int, input []autoCandidate, cfg autoSchedule
 	competitive := competitiveAutoCandidates(candidates, cfg)
 	updateAutoTargetShares(s, competitive, cfg)
 
+	// 实际分配反馈纠偏：组内转发累计达到 FeedbackUpdateInterval 时，用 dispatched
+	// 实际份额更新各候选的 EWMA actualShare 与 feedbackPenalty，供公平选择降权。
+	if cfg.FeedbackEnabled && s.totalActiveDispatched >= uint64(cfg.FeedbackUpdateInterval) {
+		updateAutoRankFeedbackEWMA(s, cfg)
+	}
+
 	var primary autoCandidate
 	reason := "quality"
 	if s.exploreCredit >= 1 {
@@ -187,7 +236,7 @@ func reconcileAutoScheduleCandidates(s *autoGroupScheduleState, candidates []aut
 		present[key] = struct{}{}
 		state := s.candidates[key]
 		if state == nil {
-			state = &autoDispatchState{}
+			state = &autoDispatchState{feedbackPenalty: 1.0}
 			s.candidates[key] = state
 		}
 		state.rank = rank + 1
@@ -250,11 +299,17 @@ func competitiveAutoCandidates(candidates []autoCandidate, cfg autoScheduleConfi
 
 	competitive := make([]autoCandidate, 0, len(ready))
 	for _, candidate := range ready {
-		if bestConfidence-candidate.stats.SuccessConfidence > cfg.SuccessGap {
-			continue
+		// 双通道准入：
+		//   - 绝对健康度达标（SuccessConfidence ≥ HealthThreshold）：不因"有略好的兄弟存在"被排除；
+		//   - 相对差距达标（与 best 的成功率差距 ≤ SuccessGap 且延迟 ≤ bestLatency×LatencyRatio）。
+		// 任一通道通过即进竞技池；HealthThreshold=0 表示禁用绝对通道，退化为纯相对差距判据。
+		healthPass := cfg.HealthThreshold > 0 && candidate.stats.SuccessConfidence >= cfg.HealthThreshold
+		relativePass := bestConfidence-candidate.stats.SuccessConfidence <= cfg.SuccessGap
+		if bestLatency > 0 {
+			latency := autoRankLatencyMS(candidate.stats)
+			relativePass = relativePass && latency <= bestLatency*cfg.LatencyRatio
 		}
-		latency := autoRankLatencyMS(candidate.stats)
-		if bestLatency > 0 && latency > bestLatency*cfg.LatencyRatio {
+		if !healthPass && !relativePass {
 			continue
 		}
 		competitive = append(competitive, candidate)
@@ -272,13 +327,13 @@ func updateAutoTargetShares(s *autoGroupScheduleState, candidates []autoCandidat
 			channelScores[channelID] = candidate.effectiveScore
 		}
 	}
-	for channelID, channelTarget := range cappedSoftmax(channelScores, cfg.ChannelMaxShare) {
+	for channelID, channelTarget := range cappedSoftmax(channelScores, cfg.ChannelMaxShare, cfg.SoftmaxTemp) {
 		modelScores := make(map[string]float64, len(byChannel[channelID]))
 		for _, candidate := range byChannel[channelID] {
 			key := autoCandidateKey(candidate.item.ChannelID, candidate.item.ModelName)
 			modelScores[key] = candidate.effectiveScore
 		}
-		for key, modelTarget := range cappedSoftmax(modelScores, cfg.ModelMaxShare) {
+		for key, modelTarget := range cappedSoftmax(modelScores, cfg.ModelMaxShare, cfg.SoftmaxTemp) {
 			s.candidates[key].targetShare = channelTarget * modelTarget
 		}
 	}
@@ -294,12 +349,27 @@ func selectFairAutoCandidate(s *autoGroupScheduleState, candidates []autoCandida
 			channelScores[channelID] = candidate.effectiveScore
 		}
 	}
-	channelTargets := cappedSoftmax(channelScores, cfg.ChannelMaxShare)
+	channelTargets := cappedSoftmax(channelScores, cfg.ChannelMaxShare, cfg.SoftmaxTemp)
 	selectedChannel := 0
 	bestDebt := math.Inf(1)
 	bestScore := math.Inf(-1)
 	for channelID, target := range channelTargets {
-		debt := float64(s.channelOffered[channelID]+1) / target
+		// 渠道层降权取渠道内候选 feedbackPenalty 的最小值：任一候选被实际分配反馈罚
+		// 即整体缩小渠道目标份额，防止"渠道内单模型超额"演变成渠道级垄断。
+		penalty := 1.0
+		if cfg.FeedbackEnabled {
+			for _, candidate := range byChannel[channelID] {
+				state := s.candidates[autoCandidateKey(candidate.item.ChannelID, candidate.item.ModelName)]
+				if state != nil && state.feedbackPenalty > 0 && state.feedbackPenalty < penalty {
+					penalty = state.feedbackPenalty
+				}
+			}
+		}
+		adjustedTarget := target * penalty
+		if adjustedTarget <= 0 {
+			adjustedTarget = target * feedbackMin
+		}
+		debt := float64(s.channelOffered[channelID]+1) / adjustedTarget
 		if debt < bestDebt ||
 			(debt == bestDebt && channelScores[channelID] > bestScore) ||
 			(debt == bestDebt && channelScores[channelID] == bestScore && (selectedChannel == 0 || channelID < selectedChannel)) {
@@ -316,13 +386,21 @@ func selectFairAutoCandidate(s *autoGroupScheduleState, candidates []autoCandida
 		modelScores[key] = candidate.effectiveScore
 		modelByKey[key] = candidate
 	}
-	modelTargets := cappedSoftmax(modelScores, cfg.ModelMaxShare)
+	modelTargets := cappedSoftmax(modelScores, cfg.ModelMaxShare, cfg.SoftmaxTemp)
 	selectedKey := ""
 	bestDebt = math.Inf(1)
 	bestScore = math.Inf(-1)
 	for key, target := range modelTargets {
 		state := s.candidates[key]
-		debt := float64(state.offered+1) / target
+		penalty := 1.0
+		if cfg.FeedbackEnabled && state != nil && state.feedbackPenalty > 0 {
+			penalty = state.feedbackPenalty
+		}
+		adjustedTarget := target * penalty
+		if adjustedTarget <= 0 {
+			adjustedTarget = target * feedbackMin
+		}
+		debt := float64(state.offered+1) / adjustedTarget
 		if debt < bestDebt ||
 			(debt == bestDebt && modelScores[key] > bestScore) ||
 			(debt == bestDebt && modelScores[key] == bestScore && (selectedKey == "" || key < selectedKey)) {
@@ -335,7 +413,7 @@ func selectFairAutoCandidate(s *autoGroupScheduleState, candidates []autoCandida
 	return modelByKey[selectedKey]
 }
 
-func cappedSoftmax[K comparable](scores map[K]float64, maxShare float64) map[K]float64 {
+func cappedSoftmax[K comparable](scores map[K]float64, maxShare, temperature float64) map[K]float64 {
 	weights := make(map[K]float64, len(scores))
 	if len(scores) == 0 {
 		return weights
@@ -348,7 +426,7 @@ func cappedSoftmax[K comparable](scores map[K]float64, maxShare float64) map[K]f
 	}
 	total := 0.0
 	for key, score := range scores {
-		weight := math.Exp((score - best) / autoSoftmaxTemperature)
+		weight := math.Exp((score - best) / temperature)
 		weights[key] = weight
 		total += weight
 	}
@@ -427,6 +505,42 @@ func autoFailoverOrder(primary autoCandidate, ranked []autoCandidate) []autoCand
 	return result
 }
 
+// updateAutoRankFeedbackEWMA 用 dispatched 实际份额更新候选的 EWMA actualShare 与
+// feedbackPenalty。调用方需持有 s.mu。
+//
+//   - instantShare = activeDispatched / totalActiveDispatched（本轮窗口内真实转发占比）；
+//   - ewmaActualShare = alpha*instantShare + (1-alpha)*ewmaActualShare；
+//   - excess = max(0, ewmaActualShare - targetShare - tolerance)；
+//   - excess > 0 时 feedbackPenalty = max(feedbackMin, 1 - excess*penaltyStrength)，
+//     否则向 1.0 平滑恢复（alpha 为恢复权重）。
+func updateAutoRankFeedbackEWMA(s *autoGroupScheduleState, cfg autoScheduleConfig) {
+	total := s.totalActiveDispatched
+	if total == 0 {
+		return
+	}
+	alpha := cfg.FeedbackEwma
+	tolerance := cfg.FeedbackTolerance
+	strength := cfg.FeedbackPenalty
+	for _, state := range s.candidates {
+		instantShare := float64(state.activeDispatched) / float64(total)
+		state.ewmaActualShare = alpha*instantShare + (1-alpha)*state.ewmaActualShare
+
+		excess := state.ewmaActualShare - state.targetShare - tolerance
+		if excess > 0 {
+			p := 1.0 - excess*strength
+			if p < feedbackMin {
+				p = feedbackMin
+			}
+			state.feedbackPenalty = p
+		} else {
+			// EWMA 平滑恢复到 1.0
+			state.feedbackPenalty = alpha*1.0 + (1-alpha)*state.feedbackPenalty
+		}
+		state.activeDispatched = 0
+	}
+	s.totalActiveDispatched = 0
+}
+
 func RecordAutoDispatch(groupID, channelID int, modelName string) {
 	if groupID <= 0 {
 		return
@@ -437,13 +551,19 @@ func RecordAutoDispatch(groupID, channelID int, modelName string) {
 	key := autoCandidateKey(channelID, modelName)
 	state := s.candidates[key]
 	if state == nil {
-		state = &autoDispatchState{}
+		state = &autoDispatchState{feedbackPenalty: 1.0}
 		s.candidates[key] = state
 	}
 	s.lastSeen = time.Now()
 	state.dispatched++
 	state.lastDispatched = time.Now()
 	s.totalDispatched++
+	// 实际分配反馈记账：仅计数，EWMA 更新由调度侧（scheduleAutoCandidates）
+	// 在下次 Candidates() 时按 FeedbackUpdateInterval 统一触发。
+	if autoRankFeedbackEnabled() {
+		state.activeDispatched++
+		s.totalActiveDispatched++
+	}
 }
 
 type AutoDispatchStats struct {

@@ -590,13 +590,205 @@ func TestAutoScheduleReconcilesRemovedCandidates(t *testing.T) {
 	}
 }
 
+// A 方案：绝对健康度达标的候选经绝对通道进竞技池，即使相对差距不达标
+func TestAutoScheduleAdmitsAbsoluteHealthCandidates(t *testing.T) {
+	AutoRankReset()
+	mk := func(ch int, name string, st AutoRankStats, score float64) autoCandidate {
+		c := newAutoCandidate(model.GroupItem{ChannelID: ch, ModelName: name}, st, score)
+		c.tier = autoCandidateTier(st, 3)
+		return c
+	}
+	candidates := []autoCandidate{
+		// A: best（conf 0.92, lat 400）——相对通道也必进
+		mk(1, "m1", AutoRankStats{Samples: 20, SuccessConfidence: 0.92, EWMATTFBMS: 400}, 91.6),
+		// B: conf=0.85 恰好达绝对阈值，但 latency 2000 > 400×1.5=600 → 相对通道不进
+		mk(2, "m2", AutoRankStats{Samples: 20, SuccessConfidence: 0.85, EWMATTFBMS: 2000}, 84.5),
+		// C: conf=0.86 ≥ 0.85 → 绝对通道进；latency 500 ≤ 600 → 相对通道也进
+		mk(3, "m3", AutoRankStats{Samples: 20, SuccessConfidence: 0.86, EWMATTFBMS: 500}, 85.6),
+		// D: conf=0.84 < 0.85 且 gap=0.08>0.02 → 双通道都不进
+		mk(4, "m4", AutoRankStats{Samples: 20, SuccessConfidence: 0.84, EWMATTFBMS: 450}, 83.6),
+	}
+	cfg := testAutoScheduleConfig(0)
+	cfg.SuccessGap = 0.02
+	cfg.LatencyRatio = 1.5
+	cfg.HealthThreshold = 0.85
+
+	competitive := competitiveAutoCandidates(candidates, cfg)
+	if len(competitive) != 3 {
+		t.Fatalf("expected 3 competitive candidates (A/B/C), got %d: %+v", len(competitive), competitive)
+	}
+	seen := map[string]bool{}
+	for _, c := range competitive {
+		seen[c.item.ModelName] = true
+	}
+	for _, name := range []string{"m1", "m2", "m3"} {
+		if !seen[name] {
+			t.Fatalf("expected %s in competitive pool, got %v", name, seen)
+		}
+	}
+	if seen["m4"] {
+		t.Fatalf("expected m4 (below absolute threshold and relative gap) to stay out, got %v", seen)
+	}
+}
+
+// A 方案：HealthThreshold=0 禁用绝对通道，退化为纯相对差距判据
+func TestAutoScheduleHealthThresholdZeroDisablesAbsoluteChannel(t *testing.T) {
+	AutoRankReset()
+	mk := func(ch int, name string, st AutoRankStats, score float64) autoCandidate {
+		c := newAutoCandidate(model.GroupItem{ChannelID: ch, ModelName: name}, st, score)
+		c.tier = autoCandidateTier(st, 3)
+		return c
+	}
+	candidates := []autoCandidate{
+		mk(1, "m1", AutoRankStats{Samples: 20, SuccessConfidence: 0.92, EWMATTFBMS: 400}, 91.6),
+		// conf=0.86 ≥ 0.85 但 gap=0.06>0.02：绝对通道开时进池，禁用后出池
+		mk(3, "m3", AutoRankStats{Samples: 20, SuccessConfidence: 0.86, EWMATTFBMS: 500}, 85.6),
+	}
+	cfg := testAutoScheduleConfig(0)
+	cfg.SuccessGap = 0.02
+	cfg.HealthThreshold = 0
+
+	competitive := competitiveAutoCandidates(candidates, cfg)
+	if len(competitive) != 1 {
+		t.Fatalf("expected only best candidate with absolute channel disabled, got %d: %+v", len(competitive), competitive)
+	}
+}
+
+// B 方案：候选实际分配持续超额（dispatched 份额远超 targetShare）时，
+// feedbackPenalty 降到 <1，debt 增大，其他候选开始收到流量
+func TestAutoScheduleFeedbackPenaltyCorrectsMonopoly(t *testing.T) {
+	AutoRankReset()
+	const gid = 200
+	stats := AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.95, EWMATTFBMS: 400, LastSeenAt: time.Now()}
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m1"}, stats, 95),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "m2"}, stats, 95),
+	}
+	cfg := testAutoScheduleConfig(0)
+	cfg.FeedbackEwma = 0.5
+	cfg.FeedbackTolerance = 0.05
+
+	// m1 垄断：先 20 次 dispatch（触发第一轮 EWMA，ewma=0.5 未超额），
+	// 再 10 次（触发第二轮，ewma=0.75 → excess=0.2 → penalty=0.94）
+	for i := 0; i < 20; i++ {
+		RecordAutoDispatch(gid, 1, "m1")
+	}
+	scheduleAutoCandidates(gid, candidates, cfg)
+	for i := 0; i < 10; i++ {
+		RecordAutoDispatch(gid, 1, "m1")
+	}
+	scheduleAutoCandidates(gid, candidates, cfg)
+
+	s := getOrCreateAutoSchedule(gid)
+	s.mu.Lock()
+	penalty := s.candidates["1:m1"].feedbackPenalty
+	s.mu.Unlock()
+	if penalty >= 1.0 {
+		t.Fatalf("expected monopoly candidate penalty < 1.0, got %v", penalty)
+	}
+
+	// 之后 m2 应开始收到主流量
+	counts := map[string]int{}
+	for i := 0; i < 60; i++ {
+		ordered := scheduleAutoCandidates(gid, candidates, cfg)
+		counts[ordered[0].item.ModelName]++
+	}
+	if counts["m2"] == 0 {
+		t.Fatalf("expected m2 to receive traffic after penalty, counts=%v", counts)
+	}
+}
+
+// B 方案：feedbackPenalty 触达 feedbackMin 地板（不会把候选完全斩断）
+func TestAutoScheduleFeedbackPenaltyFloor(t *testing.T) {
+	AutoRankReset()
+	const gid = 300
+	s := getOrCreateAutoSchedule(gid)
+	s.mu.Lock()
+	s.candidates["1:m1"] = &autoDispatchState{feedbackPenalty: 1.0, targetShare: 0.2, activeDispatched: 99}
+	s.candidates["2:m2"] = &autoDispatchState{feedbackPenalty: 1.0, targetShare: 0.8, activeDispatched: 1}
+	s.totalActiveDispatched = 100
+	s.mu.Unlock()
+
+	cfg := testAutoScheduleConfig(0)
+	cfg.FeedbackEwma = 0.9
+	cfg.FeedbackTolerance = 0
+	cfg.FeedbackPenalty = 1.0
+
+	updateAutoRankFeedbackEWMA(s, cfg)
+
+	s.mu.Lock()
+	penalty := s.candidates["1:m1"].feedbackPenalty
+	s.mu.Unlock()
+	if penalty < feedbackMin-1e-9 || penalty > feedbackMin+1e-9 {
+		t.Fatalf("expected penalty clamped to floor %v, got %v", feedbackMin, penalty)
+	}
+}
+
+// B 方案：feedbackEnabled=false 时 penalty 保持 1.0，行为与原 debt 一致
+func TestAutoScheduleFeedbackDisabledDoesNothing(t *testing.T) {
+	AutoRankReset()
+	const gid = 400
+	stats := AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.95, EWMATTFBMS: 400, LastSeenAt: time.Now()}
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m1"}, stats, 95),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "m2"}, stats, 95),
+	}
+	cfg := testAutoScheduleConfig(0)
+	cfg.FeedbackEnabled = false
+
+	for i := 0; i < 30; i++ {
+		RecordAutoDispatch(gid, 1, "m1")
+	}
+	scheduleAutoCandidates(gid, candidates, cfg)
+
+	s := getOrCreateAutoSchedule(gid)
+	s.mu.Lock()
+	penalty := s.candidates["1:m1"].feedbackPenalty
+	s.mu.Unlock()
+	if penalty != 1.0 {
+		t.Fatalf("expected penalty stay 1.0 when feedback disabled, got %v", penalty)
+	}
+}
+
+// A+B 协同：低于绝对阈值且相对差距不达标的候选不进主流量，即使 B 开启
+func TestAutoScheduleCombinedHealthAndFeedback(t *testing.T) {
+	AutoRankReset()
+	const gid = 500
+	healthy := AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.95, EWMATTFBMS: 400, LastSeenAt: time.Now()}
+	below := AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.84, EWMATTFBMS: 450, LastSeenAt: time.Now()}
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "h1"}, healthy, 94.6),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "h2"}, healthy, 94.6),
+		newAutoCandidate(model.GroupItem{ChannelID: 3, ModelName: "below"}, below, 83.6),
+	}
+	cfg := testAutoScheduleConfig(0) // exploreRatio=0：主流量只走 fair/quality
+
+	// 先给 below 一些 dispatch（模拟探索期积累的转发），确认 feedback 不会把它拉进主流量
+	for i := 0; i < 15; i++ {
+		RecordAutoDispatch(gid, 3, "below")
+	}
+	for i := 0; i < 100; i++ {
+		ordered := scheduleAutoCandidates(gid, candidates, cfg)
+		if ordered[0].item.ModelName == "below" {
+			t.Fatalf("below-threshold candidate unexpectedly became primary: %+v", ordered[0])
+		}
+	}
+}
+
 func testAutoScheduleConfig(exploreRatio float64) autoScheduleConfig {
 	return autoScheduleConfig{
-		ExploreRatio:    exploreRatio,
-		MinSamples:      3,
-		SuccessGap:      0.02,
-		LatencyRatio:    1.5,
-		ChannelMaxShare: 0.7,
-		ModelMaxShare:   0.8,
+		ExploreRatio:           exploreRatio,
+		MinSamples:             3,
+		SuccessGap:             0.02,
+		LatencyRatio:           1.5,
+		ChannelMaxShare:        0.7,
+		ModelMaxShare:          0.8,
+		SoftmaxTemp:            5.0,
+		HealthThreshold:        0.85,
+		FeedbackEnabled:        true,
+		FeedbackEwma:           0.3,
+		FeedbackTolerance:      0.1,
+		FeedbackPenalty:        0.3,
+		FeedbackUpdateInterval: 10,
 	}
 }

@@ -320,6 +320,56 @@
             "ttfbMinConfidentSample": {
                 "label": "置信样本量",
                 "placeholder": "10"
+            },
+            "thresholds": {
+                "title": "公平调度门槛",
+                "hint": "竞技池准入与份额上限，防止单一渠道或渠道内单一模型长期垄断流量。"
+            },
+            "successGap": {
+                "label": "成功率差距门槛（%）",
+                "placeholder": "2",
+                "description": "竞技池准入：与最佳候选的成功率（Wilson 下界）差距不超过该值视为相对达标。"
+            },
+            "latencyRatio": {
+                "label": "延迟倍率门槛（%）",
+                "placeholder": "150",
+                "description": "竞技池准入：候选延迟超过最佳延迟该倍数则视为相对不达标。"
+            },
+            "healthThreshold": {
+                "label": "绝对健康度阈值（%）",
+                "placeholder": "85",
+                "description": "竞技池准入：成功率（Wilson 下界）达到该值的候选无条件进入公平调度，即使存在更优候选。设为 0 禁用绝对通道。"
+            },
+            "channelMaxShare": {
+                "label": "渠道份额上限（%）",
+                "placeholder": "70",
+                "description": "公平调度：单个渠道在目标份额分配中的上限，防止渠道级垄断。"
+            },
+            "modelMaxShare": {
+                "label": "模型份额上限（%）",
+                "placeholder": "80",
+                "description": "公平调度：同一渠道内单个模型在目标份额分配中的上限，防止渠道内模型垄断。"
+            },
+            "softmaxTemp": {
+                "label": "softmax 温度（×0.1）",
+                "placeholder": "50",
+                "description": "公平调度：softmax 分配温度。越低分配越陡（最优候选拿更多），越高分配越均匀。默认 5.0（存 50）。"
+            },
+            "feedback": {
+                "label": "实际分配反馈纠偏",
+                "description": "基于真实转发份额（EWMA）对超额分配的候选/渠道降权，加速纠正短期垄断。"
+            },
+            "feedbackEwma": {
+                "label": "EWMA 新样本权重（%）",
+                "placeholder": "30"
+            },
+            "feedbackTolerance": {
+                "label": "超额容忍度（%）",
+                "placeholder": "10"
+            },
+            "feedbackPenalty": {
+                "label": "超额降权强度（%）",
+                "placeholder": "30"
             }
         },
         "saved": "已保存",
