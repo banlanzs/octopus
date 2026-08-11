@@ -136,6 +136,9 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 
 	// 初始化 Metrics
 	metrics := NewRelayMetrics(apiKeyID, requestModel, rawBody, internalRequest)
+	// 注入入站适配器，使日志记录的响应体与请求发起协议保持一致
+	// （如 Anthropic 请求记录 Anthropic Message 格式，而非统一 OpenAI 格式）
+	metrics.InboundAdapter = inAdapter
 	// 捕获客户端原始请求头（脱敏、过滤 hop-by-hop），供日志详情页展示
 	metrics.RequestHeaders = serializeRequestHeadersForLog(c.Request.Header)
 	// 捕获客户端请求路径（方法+路径），供日志展示

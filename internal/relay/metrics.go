@@ -28,6 +28,11 @@ type RelayMetrics struct {
 	InternalRequest  *transformerModel.InternalLLMRequest
 	InternalResponse *transformerModel.InternalLLMResponse
 
+	// InboundAdapter 用于将内部响应转换回入站协议格式（如 Anthropic / OpenAI Responses），
+	// 使日志记录的响应体与请求发起协议保持一致，而非统一序列化为 OpenAI 格式。
+	// 为 nil 时退回原行为（序列化内部响应）。
+	InboundAdapter transformerModel.Inbound
+
 	// RequestHeaders 记录客户端原始请求头（JSON 序列化，已过滤 hop-by-hop 与敏感头），
 	// 供日志详情页展示请求头/请求体区分。空值表示未捕获到请求头。
 	RequestHeaders string
@@ -284,13 +289,11 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		}
 	}
 
-	// 响应内容
-	if m.InternalResponse != nil {
-		respForLog := m.filterResponseForLog(m.InternalResponse)
-		if respJSON, jsonErr := json.Marshal(respForLog); jsonErr == nil {
-			relayLog.ResponseContent = string(respJSON)
-		}
-	}
+	// 响应内容：若配置了 InboundAdapter，则将内部响应转换回入站协议格式
+	// （如 Anthropic Message / OpenAI Responses），使日志中响应体与请求发起
+	// 协议保持一致，而非统一序列化为 OpenAI 格式；转换失败或无适配器时
+	// 回退为内部 OpenAI 格式序列化。
+	relayLog.ResponseContent = m.responseContentForLog(ctx)
 
 	// 错误信息
 	if err != nil {
@@ -338,6 +341,30 @@ func wsExecModePtr(value model.RelayLogWSExecMode) *model.RelayLogWSExecMode {
 
 func wsRecoveryPtr(value model.RelayLogWSRecovery) *model.RelayLogWSRecovery {
 	return &value
+}
+
+// responseContentForLog 生成日志用的响应体：若配置了 InboundAdapter，则将
+// 内部响应转换回入站协议格式（如 Anthropic Message / OpenAI Responses），
+// 使日志中响应体与请求发起协议保持一致，而非统一序列化为 OpenAI 格式；
+// 转换失败或无适配器时回退为内部 OpenAI 格式序列化。
+// 返回空字符串表示无可记录内容。
+func (m *RelayMetrics) responseContentForLog(ctx context.Context) string {
+	if m.InternalResponse == nil {
+		return ""
+	}
+	respForLog := m.filterResponseForLog(m.InternalResponse)
+	var respBytes []byte
+	var transformErr error
+	if m.InboundAdapter != nil {
+		respBytes, transformErr = m.InboundAdapter.TransformResponse(ctx, respForLog)
+	}
+	if transformErr != nil || len(respBytes) == 0 {
+		respBytes, transformErr = json.Marshal(respForLog)
+	}
+	if transformErr != nil {
+		return ""
+	}
+	return string(respBytes)
 }
 
 // filterResponseForLog 创建响应的浅拷贝，过滤掉 images、MultipleContent 中的图片数据和 Audio.Data 以减少存储压力
