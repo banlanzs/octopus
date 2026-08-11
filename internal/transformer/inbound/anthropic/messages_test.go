@@ -603,3 +603,29 @@ func TestSignatureOnlyThinkingBlockPreserved(t *testing.T) {
 		t.Fatalf("signature-only thinking block was dropped: %v", content)
 	}
 }
+
+// TestThinkingEnabledWithoutBudgetKeepsThinking verifies thinking.type=enabled
+// without budget_tokens keeps the thinking intent. The DeepSeek Anthropic docs
+// allow omitting budget_tokens (the field is ignored there), so this must not
+// be treated as "thinking will be ignored": default to medium effort and keep
+// Thinking={enabled}.
+func TestThinkingEnabledWithoutBudgetKeepsThinking(t *testing.T) {
+	inbound := &MessagesInbound{}
+	body := []byte(`{
+		"model":"deepseek-v4-pro",
+		"max_tokens":16,
+		"thinking":{"type":"enabled"},
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	req, err := inbound.TransformRequest(context.Background(), body)
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+	if req.Thinking == nil || req.Thinking.Type != "enabled" {
+		t.Fatalf("expected thinking enabled, got %+v", req.Thinking)
+	}
+	if req.ReasoningEffort != EffortMedium {
+		t.Fatalf("expected default effort %q, got %q", EffortMedium, req.ReasoningEffort)
+	}
+}

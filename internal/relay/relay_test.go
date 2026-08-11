@@ -1908,3 +1908,102 @@ func setupRelayTestDB(t *testing.T) context.Context {
 
 	return context.Background()
 }
+
+func TestResolveForceDeepSeekThinking(t *testing.T) {
+	cases := []struct {
+		name    string
+		baseURL string
+		manual  bool
+		want    bool
+	}{
+		{"manual switch on", "https://relay.example.com/v1", true, true},
+		{"official deepseek.com", "https://api.deepseek.com/v1", false, true},
+		{"official deepseek.ai", "https://api.deepseek.ai", false, true},
+		{"official uppercase", "HTTPS://API.DEEPSEEK.COM/V1", false, true},
+		{"official with path", "https://api.deepseek.com/anthropic", false, true},
+		{"alias relay station", "https://relay.example.com", false, false},
+		{"empty base url", "", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := &model.Channel{
+				ForceDeepSeekThinking: tc.manual,
+				BaseUrls:              []model.BaseUrl{{URL: tc.baseURL}},
+			}
+			if got := resolveForceDeepSeekThinking(ch); got != tc.want {
+				t.Fatalf("resolveForceDeepSeekThinking(%q, manual=%t) = %v, want %v", tc.baseURL, tc.manual, got, tc.want)
+			}
+		})
+	}
+	if resolveForceDeepSeekThinking(nil) {
+		t.Fatalf("expected nil channel to resolve false")
+	}
+}
+
+// TestHandlerAnthropicToOpenAIDeepSeekAliasKeepsThinking verifies that an
+// Anthropic request carrying thinking goes through the Anthropic→OpenAI
+// conversion with the DeepSeek `thinking` parameter preserved when the channel
+// opts into DeepSeek thinking semantics (alias model names that do not contain
+// "deepseek"). Without this, the thinking parameter is stripped and the model
+// runs without thinking.
+func TestHandlerAnthropicToOpenAIDeepSeekAliasKeepsThinking(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := setupRelayTestDB(t)
+
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read upstream request body failed: %v", err)
+		}
+		capturedBody = append([]byte(nil), body...)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","object":"chat.completion","model":"v4-pro","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	channel := &model.Channel{
+		Name:                  "relay-deepseek-alias",
+		Type:                  outbound.OutboundTypeOpenAIChat,
+		Enabled:               true,
+		BaseUrls:              []model.BaseUrl{{URL: server.URL + "/v1"}},
+		Model:                 "v4-pro", // 模型名不含 "deepseek"
+		ForceDeepSeekThinking: true,     // 中转站别名渠道手动开启
+		Keys:                  []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+
+	group := &model.Group{Name: "relay-deepseek-alias-group", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: channel.ID, ModelName: "v4-pro", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd failed: %v", err)
+	}
+
+	requestBody := `{"model":"relay-deepseek-alias-group","max_tokens":128,"thinking":{"type":"enabled","budget_tokens":4096},"messages":[{"role":"user","content":"hello"}]}`
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Set("api_key_id", 8)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(requestBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	Handler(inbound.InboundTypeAnthropic, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected request to succeed, got status %d body %s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("unmarshal upstream request failed: %v", err)
+	}
+	thinking, ok := payload["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected DeepSeek thinking parameter preserved in converted request, got %s", capturedBody)
+	}
+	if thinking["type"] != "enabled" {
+		t.Fatalf("expected thinking.type=enabled, got %#v", thinking)
+	}
+}

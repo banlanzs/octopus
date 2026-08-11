@@ -153,17 +153,17 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 
 	// 请求级上下文
 	req := &relayRequest{
-		c:                          c,
-		inAdapter:                  inAdapter,
-		internalRequest:            internalRequest,
-		metrics:                    metrics,
-		apiKeyID:                   apiKeyID,
-		requestModel:               requestModel,
-		groupID:                    group.ID,
-		groupSessionTTL:            group.SessionKeepTime,
-		iter:                       iter,
-		rawBody:                    rawBody,
-		heartbeat:                  hb,
+		c:                            c,
+		inAdapter:                    inAdapter,
+		internalRequest:              internalRequest,
+		metrics:                      metrics,
+		apiKeyID:                     apiKeyID,
+		requestModel:                 requestModel,
+		groupID:                      group.ID,
+		groupSessionTTL:              group.SessionKeepTime,
+		iter:                         iter,
+		rawBody:                      rawBody,
+		heartbeat:                    hb,
 		responsesPassthroughRequired: responsesPassthroughRequired,
 	}
 
@@ -236,8 +236,10 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		// 设置实际模型
 		internalRequest.Model = item.ModelName
 		// 渠道级 DeepSeek thinking 强制开关（中转站 DeepSeek 别名渠道：模型名
-		// 不含 "deepseek" 时仍按 DeepSeek thinking 语义透传）。
-		internalRequest.ForceDeepSeekThinking = channel.ForceDeepSeekThinking
+		// 不含 "deepseek" 时仍按 DeepSeek thinking 语义透传）。官方 DeepSeek
+		// 端点（base_url 含 deepseek.com）自动开启，避免渠道模型名不含
+		// "deepseek" 时 thinking 参数与思考块被剥离导致模型不思考。
+		internalRequest.ForceDeepSeekThinking = resolveForceDeepSeekThinking(channel)
 
 		log.Debugf("request model %s, mode: %d, forwarding to channel: %s model: %s (attempt %d/%d, sticky=%t)",
 			requestModel, group.Mode, channel.Name, item.ModelName,
@@ -490,7 +492,7 @@ func hasRealAttempt(attempts []dbmodel.ChannelAttempt) bool {
 }
 
 // filterPassthroughCapableItems 仅保留 OpenAI Response 渠道的候选
-//（OpenAI Responses 原生能力约束，兜底探测不得转发到其他渠道类型）。
+// （OpenAI Responses 原生能力约束，兜底探测不得转发到其他渠道类型）。
 func filterPassthroughCapableItems(items []dbmodel.GroupItem, ctx context.Context) []dbmodel.GroupItem {
 	out := make([]dbmodel.GroupItem, 0, len(items))
 	for _, it := range items {
@@ -664,6 +666,22 @@ func parseRequest(inboundType inbound.InboundType, c *gin.Context) ([]byte, *mod
 	}
 
 	return body, internalRequest, inAdapter, nil
+}
+
+// resolveForceDeepSeekThinking 决定请求是否按 DeepSeek thinking 语义处理：
+// 渠道手动开启开关，或渠道指向 DeepSeek 官方端点（api.deepseek.com / .ai）
+// 时自动开启。官方端点不受渠道模型名影响——模型名不含 "deepseek"（如
+// 中转站别名）时 thinking 参数与 content[].thinking 块会被当作普通
+// OpenAI 兼容模型剥离，导致 DeepSeek 模型不思考、能力下降。
+func resolveForceDeepSeekThinking(channel *dbmodel.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	if channel.ForceDeepSeekThinking {
+		return true
+	}
+	base := strings.ToLower(strings.TrimSpace(channel.GetBaseUrl()))
+	return strings.Contains(base, "deepseek.com") || strings.Contains(base, "deepseek.ai")
 }
 
 // forward 转发请求到上游服务
@@ -869,10 +887,10 @@ func serializeRequestHeadersForLog(h http.Header) string {
 		return ""
 	}
 	sensitive := map[string]bool{
-		"authorization":  true,
-		"x-api-key":      true,
-		"cookie":         true,
-		"set-cookie":     true,
+		"authorization":       true,
+		"x-api-key":           true,
+		"cookie":              true,
+		"set-cookie":          true,
 		"proxy-authorization": true,
 	}
 	sanitized := make(http.Header, len(h))

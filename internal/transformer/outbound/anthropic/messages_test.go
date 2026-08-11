@@ -829,3 +829,113 @@ func TestTransformRequestPreservesThinkingBlocksForDeepSeek(t *testing.T) {
 		t.Fatalf("thinking block lost in Anthropic→Anthropic transform: %s", body)
 	}
 }
+
+// TestTransformRequestDeepSeekGetsOutputConfigEffort verifies that DeepSeek
+// targets receive output_config.effort alongside thinking.enabled. The DeepSeek
+// Anthropic endpoint ignores budget_tokens (official docs) and only honors
+// output_config.effort for thinking intensity — without it thinking may not
+// engage at all.
+func TestTransformRequestDeepSeekGetsOutputConfigEffort(t *testing.T) {
+	outbound := &MessageOutbound{}
+	maxTokens := int64(16)
+	req := &model.InternalLLMRequest{
+		Model:           "deepseek-v4-pro",
+		MaxTokens:       &maxTokens,
+		Thinking:        &model.ThinkingConfig{Type: "enabled"},
+		ReasoningEffort: anthropicModel.EffortLow,
+		Messages: []model.Message{
+			{Role: "user", Content: model.MessageContent{Content: stringPtr("hello")}},
+		},
+	}
+
+	httpReq, err := outbound.TransformRequest(context.Background(), req, "https://api.deepseek.com/v1", "sk-test")
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+
+	var payload anthropicModel.MessageRequest
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	if payload.Thinking == nil || payload.Thinking.Type != anthropicModel.ThinkingTypeEnabled {
+		t.Fatalf("expected thinking.type=enabled, got %+v", payload.Thinking)
+	}
+	if payload.OutputConfig == nil || payload.OutputConfig.Effort != anthropicModel.EffortLow {
+		t.Fatalf("expected output_config.effort=low for DeepSeek, got %+v", payload.OutputConfig)
+	}
+}
+
+// TestTransformRequestBudgetLessEnabledGetsDefaultEffort verifies the
+// budget-less passthrough branch: thinking.enabled without ReasoningEffort
+// (valid per the DeepSeek docs, budget_tokens is ignored there) still emits a
+// default output_config.effort so thinking is not lost on DeepSeek targets.
+func TestTransformRequestBudgetLessEnabledGetsDefaultEffort(t *testing.T) {
+	outbound := &MessageOutbound{}
+	maxTokens := int64(16)
+	req := &model.InternalLLMRequest{
+		Model:     "deepseek-v4-flash",
+		MaxTokens: &maxTokens,
+		Thinking:  &model.ThinkingConfig{Type: "enabled"},
+		Messages: []model.Message{
+			{Role: "user", Content: model.MessageContent{Content: stringPtr("hello")}},
+		},
+	}
+
+	httpReq, err := outbound.TransformRequest(context.Background(), req, "https://api.deepseek.com/v1", "sk-test")
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+
+	var payload anthropicModel.MessageRequest
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	if payload.OutputConfig == nil || payload.OutputConfig.Effort != anthropicModel.EffortMedium {
+		t.Fatalf("expected default output_config.effort=medium, got %+v", payload.OutputConfig)
+	}
+}
+
+// TestTransformRequestNonDeepSeekNoOutputConfig verifies non-DeepSeek Anthropic
+// upstreams keep the previous behavior: thinking.enabled + budget_tokens only,
+// no output_config emitted.
+func TestTransformRequestNonDeepSeekNoOutputConfig(t *testing.T) {
+	outbound := &MessageOutbound{}
+	maxTokens := int64(16)
+	req := &model.InternalLLMRequest{
+		Model:           "claude-sonnet-4-5",
+		MaxTokens:       &maxTokens,
+		Thinking:        &model.ThinkingConfig{Type: "enabled"},
+		ReasoningEffort: anthropicModel.EffortLow,
+		Messages: []model.Message{
+			{Role: "user", Content: model.MessageContent{Content: stringPtr("hello")}},
+		},
+	}
+
+	httpReq, err := outbound.TransformRequest(context.Background(), req, "https://api.anthropic.com/v1", "sk-test")
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+
+	var payload anthropicModel.MessageRequest
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	if payload.Thinking == nil || payload.Thinking.Type != anthropicModel.ThinkingTypeEnabled {
+		t.Fatalf("expected thinking.type=enabled, got %+v", payload.Thinking)
+	}
+	if payload.OutputConfig != nil {
+		t.Fatalf("expected no output_config for non-DeepSeek upstream, got %+v", payload.OutputConfig)
+	}
+}

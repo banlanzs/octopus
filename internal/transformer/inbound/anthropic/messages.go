@@ -444,7 +444,10 @@ func (i *MessagesInbound) TransformRequest(ctx context.Context, body []byte) (*m
 				chatReq.ReasoningEffort = thinkingBudgetToReasoningEffort(*anthropicReq.Thinking.BudgetTokens)
 				chatReq.ReasoningBudget = anthropicReq.Thinking.BudgetTokens
 			} else {
-				log.Warnf("thinking type is 'enabled' but budget_tokens is nil, thinking will be ignored")
+				// DeepSeek Anthropic 端点忽略 budget_tokens（官方文档），客户端
+				// 按官方用法可不传该字段；用默认档兜底，保证思考意图不丢失。
+				// （出站侧会由 effort 推导 budget，对认 budget 的上游同样合法。）
+				chatReq.ReasoningEffort = EffortMedium
 			}
 			chatReq.Thinking = &model.ThinkingConfig{Type: "enabled"}
 		case ThinkingTypeAdaptive:

@@ -780,6 +780,14 @@ func convertToAnthropicRequest(req *model.InternalLLMRequest) *anthropicModel.Me
 				BudgetTokens: getThinkingBudget(req.ReasoningEffort, req.ReasoningBudget),
 				Display:      req.ThinkingDisplay,
 			}
+			// DeepSeek Anthropic 端点忽略 budget_tokens（官方文档），只认
+			// output_config.effort 控制思考强度；不补发 effort 时思考不受
+			// 控甚至可能不开启。其余 Anthropic 上游认 budget_tokens，保持不变。
+			if isDeepSeekTarget(req) {
+				result.OutputConfig = &anthropicModel.OutputConfig{
+					Effort: req.ReasoningEffort,
+				}
+			}
 		}
 	} else if req.Thinking != nil {
 		// Direct DeepSeek `thinking` passthrough (set by the Anthropic inbound when
@@ -795,6 +803,15 @@ func convertToAnthropicRequest(req *model.InternalLLMRequest) *anthropicModel.Me
 				Type:         anthropicModel.ThinkingTypeEnabled,
 				BudgetTokens: getThinkingBudget(req.ReasoningEffort, req.ReasoningBudget),
 				Display:      req.ThinkingDisplay,
+			}
+			// budget-less enabled（官方文档允许：budget_tokens 被忽略）：
+			// 补发默认档 effort，保证 DeepSeek 思考不丢失。
+			if isDeepSeekTarget(req) {
+				effort := req.ReasoningEffort
+				if effort == "" {
+					effort = anthropicModel.EffortMedium
+				}
+				result.OutputConfig = &anthropicModel.OutputConfig{Effort: effort}
 			}
 		}
 	}
@@ -835,6 +852,12 @@ func applyThinkingParamConstraints(req *anthropicModel.MessageRequest) {
 	req.Temperature = lo.ToPtr(1.0)
 	req.TopP = nil
 	req.TopK = nil
+}
+
+// isDeepSeekTarget 判断上游是否按 DeepSeek thinking 语义处理：
+// 模型名含 "deepseek"，或渠道显式开启 ForceDeepSeekThinking（中转站 DeepSeek 别名）。
+func isDeepSeekTarget(req *model.InternalLLMRequest) bool {
+	return req != nil && (strings.Contains(strings.ToLower(strings.TrimSpace(req.Model)), "deepseek") || req.ForceDeepSeekThinking)
 }
 
 func resolveAnthropicUserID(req *model.InternalLLMRequest) string {
