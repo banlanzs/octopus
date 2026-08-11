@@ -71,6 +71,7 @@ export interface RelayLog {
     cost: number;                // 消耗费用
     request_content: string;     // 请求内容
     request_headers?: string | null; // 请求头（JSON 序列化，脱敏）
+    request_path?: string;       // 请求路径（方法+路径，如 POST /v1/messages）
     response_content: string;    // 响应内容
     error: string;               // 错误信息
     attempts?: ChannelAttempt[]; // 所有尝试记录

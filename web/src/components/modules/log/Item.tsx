@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link } from 'lucide-react';
+import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link, Route } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { motion, AnimatePresence } from 'motion/react';
 import JsonView from '@uiw/react-json-view';
@@ -816,6 +816,14 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                 </div>
                                 <WSModeBadge log={log} />
                             </div>
+                            {log.request_path ? (
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                    <Route className="size-3.5 shrink-0 text-muted-foreground/60" />
+                                    <span className="font-mono truncate" title={log.request_path}>
+                                        {log.request_path}
+                                    </span>
+                                </div>
+                            ) : null}
                             <div className="grid grid-cols-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1fr)_auto] gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground">
                                 <div className="flex items-center gap-1.5">
                                     <Clock className="size-3.5 shrink-0" style={{ color: brandColor }} />
@@ -902,6 +910,14 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
 
                         <MorphingDialogDescription className="flex-1 min-h-0">
                             <div className="flex flex-col min-h-0 h-full gap-4">
+                                {displayLog.request_path ? (
+                                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-1">
+                                        <Route className="size-3.5 shrink-0 text-muted-foreground/60" />
+                                        <span className="font-mono truncate" title={displayLog.request_path}>
+                                            {displayLog.request_path}
+                                        </span>
+                                    </div>
+                                ) : null}
                                 {showDiagnosticPanel ? (
                                     <div
                                         className={cn(

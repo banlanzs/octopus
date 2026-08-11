@@ -77,6 +77,16 @@ export function ChannelForm({
 }: ChannelFormProps) {
     const t = useTranslations('channel.form');
 
+    // 按渠道类型展示 base_url 填写提示（各协议对版本路径的要求不同）
+    const baseUrlHintKey: Record<ChannelType, string> = {
+        [ChannelType.OpenAIChat]: 'baseUrlHintOpenAIChat',
+        [ChannelType.OpenAIResponse]: 'baseUrlHintOpenAIResponse',
+        [ChannelType.Anthropic]: 'baseUrlHintAnthropic',
+        [ChannelType.Gemini]: 'baseUrlHintGemini',
+        [ChannelType.Volcengine]: 'baseUrlHintVolcengine',
+        [ChannelType.OpenAIEmbedding]: 'baseUrlHintOpenAIEmbedding',
+    };
+
     // Ensure the form always shows at least 1 row for base_urls / keys / custom_header.
     // This avoids "empty list" UI and also keeps URL + APIKEY layout consistent.
     useEffect(() => {
@@ -280,6 +290,9 @@ export function ChannelForm({
                         {t('add')}
                     </Button>
                 </div>
+                <p className="text-xs text-muted-foreground/80 leading-relaxed">
+                    {t(baseUrlHintKey[formData.type])}
+                </p>
                 <div className="space-y-2">
                     {(formData.base_urls ?? []).map((u, idx) => (
                         <div key={`baseurl-${idx}`} className="flex items-center gap-2">

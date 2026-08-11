@@ -138,6 +138,8 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 	metrics := NewRelayMetrics(apiKeyID, requestModel, rawBody, internalRequest)
 	// 捕获客户端原始请求头（脱敏、过滤 hop-by-hop），供日志详情页展示
 	metrics.RequestHeaders = serializeRequestHeadersForLog(c.Request.Header)
+	// 捕获客户端请求路径（方法+路径），供日志展示
+	metrics.RequestPath = c.Request.Method + " " + c.Request.URL.Path
 	// 如果触发了 HTTP replay，记录 ws_mode=replay 和 ws_recovery=replay
 	if responsesReplayState != nil {
 		metrics.SetWSMode(dbmodel.RelayLogWSModeReplay)

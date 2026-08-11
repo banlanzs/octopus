@@ -31,6 +31,8 @@ type RelayMetrics struct {
 	// RequestHeaders 记录客户端原始请求头（JSON 序列化，已过滤 hop-by-hop 与敏感头），
 	// 供日志详情页展示请求头/请求体区分。空值表示未捕获到请求头。
 	RequestHeaders string
+	// RequestPath 记录客户端请求路径（方法+路径，如 "POST /v1/messages"），供日志展示。
+	RequestPath string
 
 	// 统计指标
 	ActualModel string
@@ -271,6 +273,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 	relayLog.WSExecMode = m.WSExecMode
 	relayLog.WSRecovery = m.WSRecovery
 	relayLog.RequestHeaders = m.RequestHeaders
+	relayLog.RequestPath = m.RequestPath
 
 	// 请求内容：优先原始请求体，保留 provider 专有字段（如 Anthropic cache_control）
 	if len(m.RawRequest) > 0 {

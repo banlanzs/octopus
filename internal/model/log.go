@@ -68,6 +68,7 @@ type RelayLog struct {
 	Cost                 float64             `json:"cost"`                                     // 消耗费用
 	RequestContent       string              `json:"request_content"`                          // 请求内容
 	RequestHeaders       string              `json:"request_headers,omitempty"`                 // 请求头（JSON 序列化，脱敏）
+	RequestPath          string              `json:"request_path,omitempty"`                    // 请求路径（方法+路径，如 POST /v1/messages）
 	ResponseContent      string              `json:"response_content"`                          // 响应内容
 	Error                string              `json:"error"`                                    // 错误信息
 	Success              bool                `json:"success" gorm:"not null;default:false"`    // 是否成功，便于状态筛选索引
