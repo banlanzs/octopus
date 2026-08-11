@@ -254,7 +254,11 @@ func findTopLevelStringField(raw []byte, field string) (int, int, bool) {
 				if depth == 0 {
 					return 0, 0, false
 				}
-				expectKey = (v == '}') && depth == 1
+				// 退出嵌套结构回到顶层对象后，下一个 token 是顶层 key。
+				// 原实现只对 '}' 恢复 expectKey，数组 '[' 进入后 ']' 退出时
+				// expectKey 恒为 false，导致数组之后的顶层字段 key/value 错位，
+				// 非首个字段（如 reasoning_effort）永远匹配不到。
+				expectKey = depth == 1
 			}
 		case string:
 			if depth == 1 && expectKey {
