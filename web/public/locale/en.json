@@ -893,7 +893,8 @@
             "wsDowngradeHint": "This request first tried upstream WebSocket, but automatically downgraded to HTTP when WebSocket was unavailable.",
             "reasoningEffort": "Reasoning",
             "failedDetail": "Failed details",
-            "failedResponseBody": "Failed response body"
+            "failedResponseBody": "Failed response body",
+            "exportCall": "Export call log"
         }
     },
     "channel": {

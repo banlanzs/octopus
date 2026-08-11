@@ -1019,6 +1019,7 @@ func (ra *relayAttempt) forwardViaHTTPPassthrough(ctx context.Context, pt model.
 	if ra.channel.Type == outbound.OutboundTypeOpenAIResponse {
 		outboundRequest.Header.Set("Content-Type", "application/json")
 	}
+	ra.recordAttemptOutboundHeaders(outboundRequest.Header)
 
 	// Send request
 	response, err := ra.sendRequest(outboundRequest)
@@ -1101,6 +1102,7 @@ func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error)
 	if ra.channel.Type == outbound.OutboundTypeOpenAIResponse {
 		outboundRequest.Header.Set("Content-Type", "application/json")
 	}
+	ra.recordAttemptOutboundHeaders(outboundRequest.Header)
 
 	// 发送请求
 	response, err := ra.sendRequest(outboundRequest)
@@ -1203,6 +1205,22 @@ func (ra *relayAttempt) recordAttemptResponseBody(body []byte) {
 		body = body[:maxFailedDetailBytes]
 	}
 	ra.attemptSpan.SetResponseBody(body)
+}
+
+// recordAttemptOutboundHeaders 把出站请求头（脱敏 JSON）写入当前尝试 span，
+// 供失败日志展示与调用日志导出。受开关与截断控制。
+func (ra *relayAttempt) recordAttemptOutboundHeaders(h http.Header) {
+	if ra.attemptSpan == nil || len(h) == 0 || !failedDetailEnabled() {
+		return
+	}
+	encoded := serializeRequestHeadersForLog(h)
+	if len(encoded) == 0 {
+		return
+	}
+	if len(encoded) > maxFailedDetailBytes {
+		encoded = encoded[:maxFailedDetailBytes]
+	}
+	ra.attemptSpan.SetOutboundHeaders([]byte(encoded))
 }
 
 // applyParamOverride merges channel-level JSON request overrides and records the final upstream payload.

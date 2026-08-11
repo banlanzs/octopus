@@ -30,6 +30,7 @@ export interface ChannelAttempt {
     msg?: string;
     request_body?: string;  // 失败详情：出站请求体（开关控制，截断）
     response_body?: string; // 失败详情：响应体（开关控制，截断）
+    outbound_headers?: string; // 失败详情：出站请求头（脱敏 JSON，开关控制）
 }
 
 /**

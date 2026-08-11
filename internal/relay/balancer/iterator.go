@@ -225,3 +225,11 @@ func (s *AttemptSpan) SetResponseBody(data []byte) {
 	}
 	s.attempt.ResponseBody = string(data)
 }
+
+// SetOutboundHeaders 记录该尝试的出站请求头（JSON 序列化，调用方负责脱敏、开关与截断）。End 后无效。
+func (s *AttemptSpan) SetOutboundHeaders(data []byte) {
+	if s.ended || len(data) == 0 {
+		return
+	}
+	s.attempt.OutboundHeaders = string(data)
+}

@@ -2093,6 +2093,13 @@ func TestHandlerFailedAttemptRecordsRequestResponseBody(t *testing.T) {
 	if attempt.ResponseBody == "" || !strings.Contains(attempt.ResponseBody, "upstream boom") {
 		t.Fatalf("expected response_body recorded, got: %q", attempt.ResponseBody)
 	}
+	// 出站请求头(脱敏 JSON)记录,且不含密钥
+	if attempt.OutboundHeaders == "" || !strings.Contains(attempt.OutboundHeaders, "Content-Type") {
+		t.Fatalf("expected outbound_headers recorded, got: %q", attempt.OutboundHeaders)
+	}
+	if strings.Contains(attempt.OutboundHeaders, "test-key") || strings.Contains(attempt.OutboundHeaders, "x-api-key") {
+		t.Fatalf("outbound_headers must be redacted, got: %s", attempt.OutboundHeaders)
+	}
 	// 出站请求体与捕获的一致
 	if !strings.Contains(string(*captured), `"thinking"`) {
 		t.Fatalf("captured upstream request missing thinking param: %s", *captured)

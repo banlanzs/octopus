@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link, Route } from 'lucide-react';
+import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link, Route, Download } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { motion, AnimatePresence } from 'motion/react';
 import JsonView from '@uiw/react-json-view';
@@ -617,12 +617,13 @@ function ResponseContentPanel({ log, isLoading }: { log: RelayLog; isLoading?: b
     );
 }
 
-function AttemptDetailBlock({ attempt }: { attempt: MergedAttempt }) {
+function AttemptDetailBlock({ attempt, log }: { attempt: MergedAttempt; log: RelayLog }) {
     const t = useTranslations('log.card');
     const [open, setOpen] = useState(false);
+    const hasHeaders = !!attempt.outbound_headers;
     const hasReq = !!attempt.request_body;
     const hasResp = !!attempt.response_body;
-    if (!hasReq && !hasResp) return null;
+    if (!hasHeaders && !hasReq && !hasResp) return null;
 
     return (
         <div className="flex flex-col gap-1.5">
@@ -636,6 +637,12 @@ function AttemptDetailBlock({ attempt }: { attempt: MergedAttempt }) {
             </button>
             {open ? (
                 <div className="flex flex-col gap-2">
+                    {hasHeaders ? (
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                            <span className="text-[10px] font-semibold text-muted-foreground">{t('requestHeaders')}</span>
+                            <pre className="max-h-40 overflow-auto rounded-lg bg-muted/50 p-2 text-[10px] font-mono whitespace-pre-wrap wrap-break-word">{attempt.outbound_headers}</pre>
+                        </div>
+                    ) : null}
                     {hasReq ? (
                         <div className="flex flex-col gap-0.5 min-w-0">
                             <span className="text-[10px] font-semibold text-muted-foreground">{t('requestBody')}</span>
@@ -651,6 +658,52 @@ function AttemptDetailBlock({ attempt }: { attempt: MergedAttempt }) {
                 </div>
             ) : null}
         </div>
+    );
+}
+
+// ExportAttemptButton 一键导出单次调用(尝试)的日志 JSON：
+// 请求头(出站,脱敏) → 请求体(出站) → 响应体(失败响应或成功响应)。
+function ExportAttemptButton({ attempt, log }: { attempt: MergedAttempt; log: RelayLog }) {
+    const t = useTranslations('log.card');
+
+    const handleExport = () => {
+        const parseJson = (raw: string | null | undefined): unknown => {
+            if (!raw) return {};
+            try {
+                return JSON.parse(raw);
+            } catch {
+                return raw;
+            }
+        };
+        const payload = {
+            channel_name: attempt.channel_name,
+            model_name: attempt.model_name,
+            attempt_num: attempt.attempt_num,
+            status: attempt.status,
+            duration_ms: attempt.totalDuration,
+            request_headers: parseJson(attempt.outbound_headers),
+            inbound_request_headers: parseJson(log.request_headers),
+            request_body: attempt.request_body || log.request_content || '',
+            response_body: attempt.response_body || log.response_content || '',
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `octopus-log-${attempt.channel_name}-attempt-${attempt.attempt_num}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    return (
+        <button
+            type="button"
+            onClick={handleExport}
+            title={t('exportCall')}
+            className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:text-card-foreground hover:bg-muted/50 transition-colors"
+        >
+            <Download className="size-3.5" />
+        </button>
     );
 }
 
@@ -1106,6 +1159,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                                         <span className="text-muted-foreground tabular-nums font-mono">
                                                                                             {formatDuration(attempt.totalDuration)}
                                                                                         </span>
+                                                                                        <ExportAttemptButton attempt={attempt} log={log} />
                                                                                         {canDisableAttempt ? (
                                                                                             <AttemptDisableButton
                                                                                                 target={attemptTarget}
@@ -1120,7 +1174,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                                         {sanitizedMsg}
                                                                                     </div>
                                                                                 ) : null}
-                                                                                <AttemptDetailBlock attempt={attempt} />
+                                                                                <AttemptDetailBlock attempt={attempt} log={log} />
                                                                             </div>
                                                                         );
                                                                     });

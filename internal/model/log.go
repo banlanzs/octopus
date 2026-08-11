@@ -25,6 +25,8 @@ type ChannelAttempt struct {
 	RequestBody string `json:"request_body,omitempty"`
 	// ResponseBody 是该尝试的失败响应体（受失败详情开关与截断控制）。
 	ResponseBody string `json:"response_body,omitempty"`
+	// OutboundHeaders 是该尝试的出站请求头（JSON 序列化，敏感值脱敏，受失败详情开关与截断控制）。
+	OutboundHeaders string `json:"outbound_headers,omitempty"`
 }
 
 // RelayLogWSMode 表示本次上游 WebSocket 的会话/恢复模式。

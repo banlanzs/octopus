@@ -893,7 +893,8 @@
             "wsDowngradeHint": "本次请求原本尝试走上游 WebSocket，但因上游不可用已自动降级为 HTTP。",
             "reasoningEffort": "推理强度",
             "failedDetail": "失败详情",
-            "failedResponseBody": "失败响应体"
+            "failedResponseBody": "失败响应体",
+            "exportCall": "导出调用日志"
         }
     },
     "channel": {
