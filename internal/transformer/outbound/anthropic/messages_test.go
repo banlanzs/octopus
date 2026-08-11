@@ -1064,3 +1064,63 @@ func TestTransformRequestRawKeepsWhitelistedReasoningEffort(t *testing.T) {
 		t.Fatalf("expected whitelisted reasoning_effort kept as-is, got %q (%s)", payload["reasoning_effort"], body)
 	}
 }
+
+// TestConvertMultipleContentKeepsThinkingBlocks verifies OpenAI-format inbound
+// thinking blocks (carried in MultipleContent, not ReasoningBlocks) survive the
+// Anthropic outbound conversion. Dropping them makes Console Go / DeepSeek reject
+// follow-up turns with "content[].thinking must be passed back".
+func TestConvertMultipleContentKeepsThinkingBlocks(t *testing.T) {
+	text := "hi"
+	thought := "let me think"
+	sig := "sig-1"
+	msg := model.Message{
+		Role: "assistant",
+		Content: model.MessageContent{MultipleContent: []model.MessageContentPart{
+			{Type: "thinking", Thinking: &thought, Signature: &sig},
+			{Type: "text", Text: &text},
+		}},
+	}
+
+	params := convertMessages(&model.InternalLLMRequest{Messages: []model.Message{msg}})
+	if len(params) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(params))
+	}
+	blocks := params[0].Content.MultipleContent
+	sawThinking := false
+	for _, b := range blocks {
+		if b.Type == "thinking" {
+			sawThinking = true
+			if b.Thinking == nil || *b.Thinking != "let me think" {
+				t.Fatalf("thinking text mismatch: %+v", b)
+			}
+			if b.Signature == nil || *b.Signature != "sig-1" {
+				t.Fatalf("signature mismatch: %+v", b)
+			}
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("thinking block lost in conversion: %+v", blocks)
+	}
+}
+
+// TestConvertMultipleContentDropsSignaturelessThinking verifies thinking blocks
+// without a signature are skipped (Anthropic rejects them in extended-thinking rounds).
+func TestConvertMultipleContentDropsSignaturelessThinking(t *testing.T) {
+	text := "hi"
+	thought := "no sig"
+	msg := model.Message{
+		Role: "assistant",
+		Content: model.MessageContent{MultipleContent: []model.MessageContentPart{
+			{Type: "thinking", Thinking: &thought},
+			{Type: "text", Text: &text},
+		}},
+	}
+
+	params := convertMessages(&model.InternalLLMRequest{Messages: []model.Message{msg}})
+	blocks := params[0].Content.MultipleContent
+	for _, b := range blocks {
+		if b.Type == "thinking" {
+			t.Fatalf("signatureless thinking block must be dropped: %+v", blocks)
+		}
+	}
+}

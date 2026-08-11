@@ -1426,6 +1426,26 @@ func convertMultiplePartContent(msg model.Message) anthropicModel.MessageContent
 
 	for _, part := range msg.Content.MultipleContent {
 		switch part.Type {
+		case "thinking":
+			// OpenAI 入站/round-trip 的 thinking 块由 MultipleContent 承载（ReasoningBlocks
+			// 为空，emitThinkingBlocks 不会覆盖）。原样回传：DeepSeek/Console Go 要求
+			// thinking 块回传，否则 400 "content[].thinking must be passed back"。
+			// 无 signature 的块在 Anthropic 后续 extended-thinking 轮次会被拒绝，跳过。
+			if part.Signature == nil || *part.Signature == "" {
+				continue
+			}
+			blocks = append(blocks, anthropicModel.MessageContentBlock{
+				Type:      "thinking",
+				Thinking:  part.Thinking,
+				Signature: part.Signature,
+			})
+		case "redacted_thinking":
+			if part.RedactedThinking != nil && *part.RedactedThinking != "" {
+				blocks = append(blocks, anthropicModel.MessageContentBlock{
+					Type: "redacted_thinking",
+					Data: *part.RedactedThinking,
+				})
+			}
 		case "text":
 			if part.Text != nil {
 				blocks = append(blocks, anthropicModel.MessageContentBlock{
