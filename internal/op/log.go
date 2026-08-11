@@ -697,6 +697,7 @@ func selectRelayLogListFields(query *gorm.DB, includeContent bool) *gorm.DB {
 		"ftut",
 		"use_time",
 		"cost",
+		"request_path",
 		"error",
 		"success",
 		"reasoning_effort",

@@ -103,6 +103,42 @@ func TestRelayLogListDefaultsToLightFieldsAndNoContentKeyword(t *testing.T) {
 
 func intPtr(v int) *int { return &v }
 
+// TestRelayLogListKeepsRequestPathInLightFields 验证列表轻量查询（不含请求/响应
+// 内容）仍返回 request_path，供日志卡片直接展示请求路径。
+func TestRelayLogListKeepsRequestPathInLightFields(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	if err := settingRefreshCache(ctx); err != nil {
+		t.Fatalf("settingRefreshCache failed: %v", err)
+	}
+	resetRelayLogStateForTest()
+
+	rows := []model.RelayLog{
+		{ID: 501, Time: 501, RequestModelName: "claude-3", RequestPath: "POST /v1/messages", Success: true},
+		{ID: 502, Time: 502, RequestModelName: "gpt-4o", RequestPath: "POST /v1/chat/completions", Success: true},
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&rows).Error; err != nil {
+		t.Fatalf("create relay logs failed: %v", err)
+	}
+
+	result, err := RelayLogListWithFilter(ctx, RelayLogListFilter{Page: 1, PageSize: 10, WithTotal: true})
+	if err != nil {
+		t.Fatalf("RelayLogListWithFilter failed: %v", err)
+	}
+	if len(result.Logs) != 2 {
+		t.Fatalf("expected 2 logs, got %d", len(result.Logs))
+	}
+	byID := make(map[int64]string, len(result.Logs))
+	for _, item := range result.Logs {
+		if item.RequestPath == "" {
+			t.Fatalf("expected request_path present in light list fields, got %+v", item)
+		}
+		byID[item.ID] = item.RequestPath
+	}
+	if byID[501] != "POST /v1/messages" || byID[502] != "POST /v1/chat/completions" {
+		t.Fatalf("unexpected request_path values: %+v", byID)
+	}
+}
+
 func TestRelayLogListContainsKeywordRequiresMinLength(t *testing.T) {
 	ctx := setupSiteOpTestDB(t)
 	if err := settingRefreshCache(ctx); err != nil {
