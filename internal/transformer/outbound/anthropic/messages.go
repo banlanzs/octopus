@@ -105,6 +105,17 @@ func (o *MessageOutbound) TransformRequestRaw(ctx context.Context, rawBody []byt
 		}
 		rawBody = rewrittenBody
 	}
+	// DeepSeek Anthropic 端点对顶层 reasoning_effort 做严格白名单校验
+	// （仅接受 low/medium/high/xhigh/max）。Claude Code 等客户端会发送
+	// Anthropic 生态的 "minimal" 等值，原样透传会被上游 400 拒绝；对
+	// DeepSeek 目标归一化非法值（minimal→low、未知→low），合法值原样保留。
+	if isDeepSeekAnthropicTarget(modelName, baseUrl) {
+		normalizedBody, err := normalizeRawReasoningEffort(rawBody)
+		if err != nil {
+			return nil, err
+		}
+		rawBody = normalizedBody
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "", bytes.NewReader(rawBody))
 	if err != nil {
@@ -148,15 +159,7 @@ func rewriteRawRequestModel(rawBody []byte, modelName string) ([]byte, error) {
 	modelName = strings.TrimSpace(modelName)
 	valueStart, valueEnd, ok := findTopLevelStringField(rawBody, "model")
 	if ok {
-		encoded, err := json.Marshal(modelName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode model value: %w", err)
-		}
-		result := make([]byte, 0, len(rawBody)-(valueEnd-valueStart)+len(encoded))
-		result = append(result, rawBody[:valueStart]...)
-		result = append(result, encoded...)
-		result = append(result, rawBody[valueEnd:]...)
-		return result, nil
+		return replaceRawStringField(rawBody, valueStart, valueEnd, modelName), nil
 	}
 
 	// fallback：顶层没有 model 字段（理论上不该发生，Anthropic 请求必填）；保持旧行为。
@@ -170,6 +173,49 @@ func rewriteRawRequestModel(rawBody []byte, modelName string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to encode raw anthropic request: %w", err)
 	}
 	return rewrittenBody, nil
+}
+
+// replaceRawStringField 用新字符串值替换原始字节中指定 value 范围（含首尾引号）。
+func replaceRawStringField(rawBody []byte, valueStart, valueEnd int, newValue string) []byte {
+	encoded, err := json.Marshal(newValue)
+	if err != nil {
+		return rawBody
+	}
+	result := make([]byte, 0, len(rawBody)-(valueEnd-valueStart)+len(encoded))
+	result = append(result, rawBody[:valueStart]...)
+	result = append(result, encoded...)
+	result = append(result, rawBody[valueEnd:]...)
+	return result
+}
+
+// isDeepSeekAnthropicTarget 判断 Anthropic 透传目标是否按 DeepSeek 语义处理：
+// 模型名含 "deepseek"，或端点指向 DeepSeek 官方（api.deepseek.com / .ai）。
+func isDeepSeekAnthropicTarget(modelName, baseURL string) bool {
+	if strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "deepseek") {
+		return true
+	}
+	base := strings.ToLower(strings.TrimSpace(baseURL))
+	return strings.Contains(base, "deepseek.com") || strings.Contains(base, "deepseek.ai")
+}
+
+// normalizeRawReasoningEffort 对透传请求的顶层 reasoning_effort 做白名单归一化。
+// DeepSeek Anthropic 端点只接受 low/medium/high/xhigh/max，Anthropic 生态的
+// "minimal" 或未知值会被上游 400 拒绝；白名单值原样保留，其余映射为 "low"
+// （保留最低档思考）。字段缺失或非字符串时原样返回。
+func normalizeRawReasoningEffort(rawBody []byte) ([]byte, error) {
+	valueStart, valueEnd, ok := findTopLevelStringField(rawBody, "reasoning_effort")
+	if !ok {
+		return rawBody, nil
+	}
+	var value string
+	if err := json.Unmarshal(rawBody[valueStart:valueEnd], &value); err != nil {
+		return rawBody, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "low", "medium", "high", "xhigh", "max":
+		return rawBody, nil
+	}
+	return replaceRawStringField(rawBody, valueStart, valueEnd, "low"), nil
 }
 
 // findTopLevelStringField 在顶层 JSON 对象中定位指定字符串字段的 value 字节范围

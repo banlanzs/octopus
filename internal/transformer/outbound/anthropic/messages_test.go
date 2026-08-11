@@ -939,3 +939,128 @@ func TestTransformRequestNonDeepSeekNoOutputConfig(t *testing.T) {
 		t.Fatalf("expected no output_config for non-DeepSeek upstream, got %+v", payload.OutputConfig)
 	}
 }
+
+func TestNormalizeRawReasoningEffort(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string // 期望 body 中包含的 reasoning_effort 值；"" 表示字段被省略
+	}{
+		{"whitelist low", `{"model":"deepseek-chat","reasoning_effort":"low"}`, "low"},
+		{"whitelist max", `{"model":"deepseek-chat","reasoning_effort":"max"}`, "max"},
+		{"minimal maps to low", `{"model":"deepseek-chat","reasoning_effort":"minimal"}`, "low"},
+		{"minimal uppercase", `{"model":"deepseek-chat","reasoning_effort":"MINIMAL"}`, "low"},
+		{"unknown maps to low", `{"model":"deepseek-chat","reasoning_effort":"ultra"}`, "low"},
+		{"missing field", `{"model":"deepseek-chat"}`, ""},
+		{"nested field untouched", `{"model":"deepseek-chat","messages":[{"role":"user","content":"reasoning_effort=minimal"}]}`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeRawReasoningEffort([]byte(tc.body))
+			if err != nil {
+				t.Fatalf("normalizeRawReasoningEffort() error = %v", err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(got, &payload); err != nil {
+				t.Fatalf("unmarshal normalized body: %v\n%s", err, got)
+			}
+			if tc.want == "" {
+				if _, ok := payload["reasoning_effort"]; ok {
+					t.Fatalf("expected reasoning_effort removed, got %s", got)
+				}
+			} else if payload["reasoning_effort"] != tc.want {
+				t.Fatalf("expected reasoning_effort=%q, got %q (%s)", tc.want, payload["reasoning_effort"], got)
+			}
+		})
+	}
+}
+
+// TestTransformRequestRawNormalizesReasoningEffortForDeepSeek verifies the
+// Anthropic passthrough path normalizes a non-whitelisted top-level
+// reasoning_effort (e.g. Claude Code's "minimal") before forwarding to DeepSeek
+// Anthropic endpoints, which reject it with 400; non-DeepSeek targets keep the
+// original value untouched.
+func TestTransformRequestRawNormalizesReasoningEffortForDeepSeek(t *testing.T) {
+	rawBody := []byte(`{"model":"deepseek-v4-flash-0731","max_tokens":128,"reasoning_effort":"minimal","messages":[{"role":"user","content":"hello"}]}`)
+
+	outbound := &MessageOutbound{}
+	httpReq, err := outbound.TransformRequestRaw(context.Background(), rawBody, "deepseek-v4-flash-0731", "https://api.deepseek.com", "sk-test", nil)
+	if err != nil {
+		t.Fatalf("TransformRequestRaw() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	if payload["reasoning_effort"] != "low" {
+		t.Fatalf("expected reasoning_effort normalized to low for DeepSeek, got %q (%s)", payload["reasoning_effort"], body)
+	}
+}
+
+func TestTransformRequestRawNormalizesReasoningEffortForDeepSeekAliasModel(t *testing.T) {
+	// 中转站:模型名含 deepseek 但域名非官方
+	rawBody := []byte(`{"model":"deepseek-v4-flash","reasoning_effort":"minimal","messages":[{"role":"user","content":"hello"}]}`)
+
+	outbound := &MessageOutbound{}
+	httpReq, err := outbound.TransformRequestRaw(context.Background(), rawBody, "deepseek-v4-flash", "https://relay.example.com", "sk-test", nil)
+	if err != nil {
+		t.Fatalf("TransformRequestRaw() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	if payload["reasoning_effort"] != "low" {
+		t.Fatalf("expected reasoning_effort normalized to low for deepseek model name, got %q (%s)", payload["reasoning_effort"], body)
+	}
+}
+
+func TestTransformRequestRawKeepsReasoningEffortForNonDeepSeek(t *testing.T) {
+	rawBody := []byte(`{"model":"claude-sonnet-4-5","max_tokens":128,"reasoning_effort":"minimal","messages":[{"role":"user","content":"hello"}]}`)
+
+	outbound := &MessageOutbound{}
+	httpReq, err := outbound.TransformRequestRaw(context.Background(), rawBody, "claude-sonnet-4-5", "https://api.anthropic.com", "sk-test", nil)
+	if err != nil {
+		t.Fatalf("TransformRequestRaw() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	if payload["reasoning_effort"] != "minimal" {
+		t.Fatalf("expected reasoning_effort untouched for non-DeepSeek, got %q (%s)", payload["reasoning_effort"], body)
+	}
+}
+
+func TestTransformRequestRawKeepsWhitelistedReasoningEffort(t *testing.T) {
+	rawBody := []byte(`{"model":"deepseek-v4-flash","max_tokens":128,"reasoning_effort":"high","messages":[{"role":"user","content":"hello"}]}`)
+
+	outbound := &MessageOutbound{}
+	httpReq, err := outbound.TransformRequestRaw(context.Background(), rawBody, "deepseek-v4-flash", "https://api.deepseek.com", "sk-test", nil)
+	if err != nil {
+		t.Fatalf("TransformRequestRaw() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	if payload["reasoning_effort"] != "high" {
+		t.Fatalf("expected whitelisted reasoning_effort kept as-is, got %q (%s)", payload["reasoning_effort"], body)
+	}
+}
