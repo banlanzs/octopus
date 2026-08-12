@@ -278,3 +278,176 @@ func readHTTPBody(req *http.Request) ([]byte, error) {
 	}
 	return io.ReadAll(req.Body)
 }
+
+// TestTransformRequestRawEnsuresThinkingReplay 回归：DeepSeek 透传路径为历史中
+// "做了工具调用但无 thinking 块"的 assistant 消息补充占位 thinking 块。
+// 否则 DeepSeek Anthropic 端点思考模式返回 400
+// ("The `content[].thinking` in the thinking mode must be passed back to the API")。
+func TestTransformRequestRawEnsuresThinkingReplay(t *testing.T) {
+	body := `{"model":"claude-sonnet-5","max_tokens":64,"messages":[
+		{"role":"user","content":"search something"},
+		{"role":"assistant","content":[
+			{"type":"thinking","thinking":"let me think","signature":"sig-123"},
+			{"type":"text","text":"I will look it up"},
+			{"type":"tool_use","id":"call_1","name":"search","input":{"q":"x"}}
+		]},
+		{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"done"}]},
+		{"role":"assistant","content":[
+			{"type":"tool_use","id":"call_2","name":"edit","input":{"file":"a"}}
+		]},
+		{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_2","content":"ok"}]}
+	]}`
+
+	outbound := &MessageOutbound{}
+	req, err := outbound.TransformRequestRaw(
+		context.Background(),
+		[]byte(body),
+		"deepseek-v4-pro",
+		"https://api.deepseek.com/anthropic",
+		"sk-test",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("TransformRequestRaw() error = %v", err)
+	}
+	out, err := readHTTPBody(req)
+	if err != nil {
+		t.Fatalf("read body error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("输出 JSON 损坏: %v\n%s", err, out)
+	}
+	msgs := payload["messages"].([]any)
+	if len(msgs) != 5 {
+		t.Fatalf("messages 数量被破坏: %d", len(msgs))
+	}
+
+	// 第 1 个 assistant（原本就有 thinking）不应被重复插入
+	first := msgs[1].(map[string]any)["content"].([]any)
+	firstTypes := blocksTypeOf(first)
+	if !containsType(firstTypes, "thinking") || countType(firstTypes, "thinking") != 1 {
+		t.Fatalf("已有 thinking 的 assistant 被重复插入或丢失: %v", firstTypes)
+	}
+
+	// 第 2 个 assistant（tool_use 无 thinking）必须被补上占位块
+	second := msgs[3].(map[string]any)["content"].([]any)
+	secondTypes := blocksTypeOf(second)
+	if countType(secondTypes, "thinking") != 1 {
+		t.Fatalf("tool-use assistant 未补 thinking 块: %v", secondTypes)
+	}
+	// 占位块必须在 content 开头，且 signature 非空
+	firstBlock := second[0].(map[string]any)
+	if firstBlock["type"] != "thinking" {
+		t.Fatalf("占位 thinking 块未插入 content 开头: %v", secondTypes)
+	}
+	sig, _ := firstBlock["signature"].(string)
+	if sig == "" {
+		t.Fatalf("占位 thinking 块缺少 signature: %v", firstBlock)
+	}
+	// 原 tool_use 块必须保留
+	if !containsType(secondTypes, "tool_use") {
+		t.Fatalf("tool_use 块丢失: %v", secondTypes)
+	}
+}
+
+// TestTransformRequestRawNoThinkingReplayNonDeepSeek 非 DeepSeek 目标不处理 thinking 回传。
+func TestTransformRequestRawNoThinkingReplayNonDeepSeek(t *testing.T) {
+	body := `{"model":"claude-sonnet-5","max_tokens":64,"messages":[
+		{"role":"assistant","content":[
+			{"type":"tool_use","id":"call_1","name":"search","input":{"q":"x"}}
+		]}
+	]}`
+
+	outbound := &MessageOutbound{}
+	req, err := outbound.TransformRequestRaw(
+		context.Background(),
+		[]byte(body),
+		"claude-sonnet-5",
+		"https://api.anthropic.com/v1",
+		"sk-test",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("TransformRequestRaw() error = %v", err)
+	}
+	out, err := readHTTPBody(req)
+	if err != nil {
+		t.Fatalf("read body error = %v", err)
+	}
+	if string(out) != body {
+		t.Fatalf("非 DeepSeek 目标应逐字节透传:\n输入: %s\n输出: %s", body, out)
+	}
+}
+
+// TestTransformRequestRawThinkingReplayByteStable 无缺失块的 messages 保持逐字节不变
+// （仅 model 被透传路径重写，messages 区域不得有任何改动）。
+func TestTransformRequestRawThinkingReplayByteStable(t *testing.T) {
+	body := `{"model":"claude-sonnet-5","max_tokens":64,"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":[
+			{"type":"thinking","thinking":"t","signature":"sig-1"},
+			{"type":"text","text":"hello"}
+		]}
+	]}`
+
+	outbound := &MessageOutbound{}
+	req, err := outbound.TransformRequestRaw(
+		context.Background(),
+		[]byte(body),
+		"deepseek-v4-pro",
+		"https://api.deepseek.com/anthropic",
+		"sk-test",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("TransformRequestRaw() error = %v", err)
+	}
+	out, err := readHTTPBody(req)
+	if err != nil {
+		t.Fatalf("read body error = %v", err)
+	}
+	var inPayload, outPayload map[string]any
+	if err := json.Unmarshal([]byte(body), &inPayload); err != nil {
+		t.Fatalf("输入 JSON 损坏: %v", err)
+	}
+	if err := json.Unmarshal(out, &outPayload); err != nil {
+		t.Fatalf("输出 JSON 损坏: %v", err)
+	}
+	inMsgs, _ := json.Marshal(inPayload["messages"])
+	outMsgs, _ := json.Marshal(outPayload["messages"])
+	if string(inMsgs) != string(outMsgs) {
+		t.Fatalf("无缺失块时 messages 被改动:\n输入: %s\n输出: %s", inMsgs, outMsgs)
+	}
+}
+
+func blocksTypeOf(blocks []any) []string {
+	out := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if m, ok := b.(map[string]any); ok {
+			if t, _ := m["type"].(string); t != "" {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
+func containsType(types []string, want string) bool {
+	for _, t := range types {
+		if t == want {
+			return true
+		}
+	}
+	return false
+}
+
+func countType(types []string, want string) int {
+	n := 0
+	for _, t := range types {
+		if t == want {
+			n++
+		}
+	}
+	return n
+}

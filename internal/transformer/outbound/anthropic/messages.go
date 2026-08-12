@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/samber/lo"
 
 	"github.com/bestruirui/octopus/internal/transformer/compat"
@@ -124,6 +125,17 @@ func (o *MessageOutbound) TransformRequestRaw(ctx context.Context, rawBody []byt
 			return nil, err
 		}
 		rawBody = strippedBody
+
+		// DeepSeek 思考模式回传契约：历史中所有做了工具调用的 assistant 消息都必须
+		// 携带 content[].thinking 块，否则上游 400
+		// ("The `content[].thinking` in the thinking mode must be passed back to the API")。
+		// 客户端（Claude Code）在同一会话中切换模型/关闭思考时，部分轮次的 assistant
+		// 没有 thinking 块；为这类消息补充占位块以通过上游校验。
+		replayedBody, err := ensureDeepSeekThinkingReplay(rawBody)
+		if err != nil {
+			return nil, err
+		}
+		rawBody = replayedBody
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "", bytes.NewReader(rawBody))
@@ -367,6 +379,75 @@ func stripDisabledThinkingForDeepSeek(rawBody []byte) ([]byte, bool, error) {
 		newBody = append(newBody, rawBody[valueEnd:]...)
 	}
 	return newBody, true, nil
+}
+
+// ensureDeepSeekThinkingReplay 保证 DeepSeek Anthropic 端点的 thinking 回传契约：
+// 思考模式下，历史中所有"做了工具调用（含 tool_use 块）的 assistant 消息"都必须携带
+// content[].thinking 块，否则上游返回 400
+// ("The `content[].thinking` in the thinking mode must be passed back to the API")。
+// 客户端（Claude Code）在同一会话中切换模型或关闭思考时，部分轮次生成的 assistant
+// 没有 thinking 块，回传到 DeepSeek 时被其严格校验拒绝。
+//
+// 处理：为缺失 thinking 块的 tool-use assistant 消息在 content 开头插入占位 thinking 块
+// （thinking 为空 + UUID 签名，与 DeepSeek 签发的 signature 格式一致）。DeepSeek 对
+// 回传的 thinking 块做存在性校验（其自身签发的块原样回传同样会因缺失块报错），
+// 补充占位块即可通过；思考关闭时回传 thinking 会被上游忽略（无副作用，同
+// materializeDeepSeekThinkingBlocks 的处理原则）。
+//
+// 无变化时原样返回原始字节，保持现有字节级透传语义（prompt cache 依赖）。
+func ensureDeepSeekThinkingReplay(rawBody []byte) ([]byte, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(rawBody, &payload); err != nil {
+		return rawBody, nil
+	}
+	msgsAny, ok := payload["messages"].([]any)
+	if !ok || len(msgsAny) == 0 {
+		return rawBody, nil
+	}
+	changed := false
+	for _, msgAny := range msgsAny {
+		msg, ok := msgAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		if role, _ := msg["role"].(string); role != "assistant" {
+			continue
+		}
+		contentAny, ok := msg["content"].([]any)
+		if !ok || len(contentAny) == 0 {
+			continue
+		}
+		hasThinking, hasToolUse := false, false
+		for _, blockAny := range contentAny {
+			block, ok := blockAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch block["type"] {
+			case "thinking":
+				hasThinking = true
+			case "tool_use":
+				hasToolUse = true
+			}
+		}
+		if !hasToolUse || hasThinking {
+			continue
+		}
+		// 占位 thinking 块插入 content 开头（Anthropic 协议中 thinking 位于其他块之前）
+		newContent := make([]any, 0, len(contentAny)+1)
+		newContent = append(newContent, map[string]any{
+			"type":      "thinking",
+			"thinking":  "",
+			"signature": uuid.NewString(),
+		})
+		newContent = append(newContent, contentAny...)
+		msg["content"] = newContent
+		changed = true
+	}
+	if !changed {
+		return rawBody, nil
+	}
+	return json.Marshal(payload)
 }
 
 // findTopLevelFieldRange 定位顶层对象中指定字段的 key 起始与 value 结束字节范围。
