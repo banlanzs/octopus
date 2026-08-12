@@ -620,6 +620,9 @@ function ResponseContentPanel({ log, isLoading }: { log: RelayLog; isLoading?: b
 function AttemptDetailBlock({ attempt, log }: { attempt: MergedAttempt; log: RelayLog }) {
     const t = useTranslations('log.card');
     const [open, setOpen] = useState(false);
+    // 失败详情区块只对失败/错误尝试生效：成功调用的完整请求/响应已由
+    // 卡片上方的请求头/请求体/响应体面板记录，重复展示反而缺响应体。
+    if (attempt.status === 'success') return null;
     const hasHeaders = !!attempt.outbound_headers;
     const hasReq = !!attempt.request_body;
     const hasResp = !!attempt.response_body;
@@ -662,7 +665,10 @@ function AttemptDetailBlock({ attempt, log }: { attempt: MergedAttempt; log: Rel
 }
 
 // ExportAttemptButton 一键导出单次调用(尝试)的日志 JSON：
-// 请求头(出站,脱敏) → 请求体(出站) → 响应体(失败响应或成功响应)。
+// - 成功尝试：导出原本日志的完整记录（入站请求头 → 入站请求体 → 响应体），
+//   与卡片上的请求/响应面板一致，避免遗漏响应体。
+// - 失败尝试：导出失败详情（出站请求头 → 出站请求体 → 失败响应体），
+//   用于排查网关实际发送给上游的形态。
 function ExportAttemptButton({ attempt, log }: { attempt: MergedAttempt; log: RelayLog }) {
     const t = useTranslations('log.card');
 
@@ -675,17 +681,28 @@ function ExportAttemptButton({ attempt, log }: { attempt: MergedAttempt; log: Re
                 return raw;
             }
         };
-        const payload = {
+        const isSuccess = attempt.status === 'success';
+        const base = {
             channel_name: attempt.channel_name,
             model_name: attempt.model_name,
             attempt_num: attempt.attempt_num,
             status: attempt.status,
             duration_ms: attempt.totalDuration,
-            request_headers: parseJson(attempt.outbound_headers),
-            inbound_request_headers: parseJson(log.request_headers),
-            request_body: attempt.request_body || log.request_content || '',
-            response_body: attempt.response_body || log.response_content || '',
         };
+        const payload = isSuccess
+            ? {
+                  ...base,
+                  request_headers: parseJson(log.request_headers),
+                  request_body: log.request_content || '',
+                  response_body: log.response_content || '',
+              }
+            : {
+                  ...base,
+                  request_headers: parseJson(attempt.outbound_headers),
+                  inbound_request_headers: parseJson(log.request_headers),
+                  request_body: attempt.request_body || log.request_content || '',
+                  response_body: attempt.response_body || log.response_content || '',
+              };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
