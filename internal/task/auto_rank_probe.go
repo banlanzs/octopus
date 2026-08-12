@@ -17,6 +17,17 @@ import (
 // autoRankProbeConcurrency 单轮探测的并发上限，取与分组健康检查一致的保守值。
 const autoRankProbeConcurrency = 2
 
+// autoRankProbeChannelQuota 单轮内同一渠道最多占用的探测名额。
+//
+// 上游风控看的是单个 key 的瞬时请求频率，不是全局速率。候选按欠采样程度排序，
+// 新增渠道名下所有模型的真实样本都是 0，会整片挤在队列最前——不设配额时一轮的
+// 名额会全归它，并发 2 之下等于几秒内向同一个 key 连发十次，这跟"每 5 分钟 10 次"
+// 是两码事。配额 1 把名额摊到不同上游，单渠道探测频率退化为"每轮至多一次"，
+// 同时并发 2 必然落在不同渠道，单渠道并发恒为 1。
+//
+// 代价是模型多的渠道要多轮才能覆盖一遍——探测本就是低频补充信号，不是实时监控。
+const autoRankProbeChannelQuota = 1
+
 // autoRankProbeTimeout 单轮任务的总时限。maxPerRound 默认 10、并发 2、单次探测
 // 12s，最坏 5 批约 60s，留一倍余量。
 const autoRankProbeTimeout = 2 * time.Minute
@@ -78,9 +89,11 @@ func AutoRankProbeTask() {
 		}
 		return candidates[i].lastProbeAt.Before(candidates[j].lastProbeAt)
 	})
-	if maxPerRound := autoRankProbeIntSetting(model.SettingKeyAutoRankProbeMaxPerRound, 10); len(candidates) > maxPerRound {
-		candidates = candidates[:maxPerRound]
-	}
+	candidates = pickAutoRankProbeTargets(
+		candidates,
+		autoRankProbeIntSetting(model.SettingKeyAutoRankProbeMaxPerRound, 10),
+		autoRankProbeChannelQuota,
+	)
 
 	var (
 		mu sync.Mutex
@@ -213,6 +226,34 @@ func collectAutoRankProbeCandidates(ctx context.Context) ([]autoRankProbeCandida
 		}
 	}
 	return out, alive
+}
+
+// pickAutoRankProbeTargets 从已排序的候选中挑出本轮探测目标：同一渠道最多占
+// channelQuota 个名额，总数不超过 maxPerRound。
+//
+// 顺序很关键——必须先按渠道摊名额、再受总数约束。反过来（先截断到 maxPerRound
+// 再过滤配额）会让排在最前的那个渠道先占满全部名额，随后被配额砍到只剩一个，
+// 白白浪费本该分给其他渠道的探测机会。
+func pickAutoRankProbeTargets(candidates []autoRankProbeCandidate, maxPerRound, channelQuota int) []autoRankProbeCandidate {
+	if maxPerRound <= 0 {
+		return nil
+	}
+	if channelQuota <= 0 {
+		channelQuota = 1
+	}
+	picked := make([]autoRankProbeCandidate, 0, min(maxPerRound, len(candidates)))
+	perChannel := make(map[int]int, len(candidates))
+	for _, c := range candidates {
+		if len(picked) >= maxPerRound {
+			break
+		}
+		if perChannel[c.key.channelID] >= channelQuota {
+			continue
+		}
+		perChannel[c.key.channelID]++
+		picked = append(picked, c)
+	}
+	return picked
 }
 
 func autoRankProbeLastSeen(key autoRankProbeKey) time.Time {
