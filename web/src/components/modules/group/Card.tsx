@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Trash2, X, Pencil, Pin, PinOff } from 'lucide-react';
+import { Trash2, X, Pencil, Pin, PinOff, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { type Group, useDeleteGroup, useUpdateGroup, useToggleGroupPin } from '@/api/endpoints/group';
+import { type Group, useDeleteGroup, useUpdateGroup, useToggleGroupPin, exportGroupJson } from '@/api/endpoints/group';
 import { useModelChannelList } from '@/api/endpoints/model';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
@@ -140,6 +140,16 @@ export function GroupCard({ group }: { group: Group }) {
 
     const onSuccess = useCallback(() => toast.success(t('toast.updated')), [t]);
     const onError = useCallback((error: Error) => toast.error(t('toast.updateFailed'), { description: error.message }), [t]);
+
+    const handleExport = useCallback(async () => {
+        if (!group.id) return;
+        try {
+            await exportGroupJson(group.id, group.name);
+            toast.success(t('toast.exported'));
+        } catch (e) {
+            toast.error(t('toast.exportFailed'), { description: e instanceof Error ? e.message : String(e) });
+        }
+    }, [group.id, group.name, t]);
 
     // Avoid UI flicker: drag-reorder also uses the same mutation, so only "mode switch" should lock mode buttons.
     const isUpdatingMode = (() => {
@@ -315,6 +325,19 @@ export function GroupCard({ group }: { group: Group }) {
                     </Tooltip>
 
                     <PresetPopover group={group} />
+
+                    <Tooltip side="top" sideOffset={10} align="center">
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                onClick={handleExport}
+                                className="p-1.5 rounded-lg transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
+                            >
+                                <Download className="size-4" />
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent>{t('detail.actions.export')}</TooltipContent>
+                    </Tooltip>
 
                     <MorphingDialog>
                         <MorphingDialogTrigger className="p-1.5 rounded-lg transition-colors hover:bg-muted text-muted-foreground hover:text-foreground">

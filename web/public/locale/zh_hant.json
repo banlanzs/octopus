@@ -44,7 +44,9 @@
         "group": "分組",
         "model": "價格",
         "log": "日誌",
-        "setting": "設定"
+        "setting": "設定",
+        "collapse": "摺疊側邊欄",
+        "expand": "展開側邊欄"
     },
     "toolbar": {
         "popover": {
@@ -634,7 +636,9 @@
             "deleteFailed": "刪除失敗",
             "pinned": "已置頂",
             "unpinned": "已取消置頂",
-            "pinFailed": "置頂操作失敗"
+            "pinFailed": "置頂操作失敗",
+            "exported": "已匯出分組除錯資訊",
+            "exportFailed": "匯出失敗"
         },
         "pin": {
             "pin": "置頂",
@@ -688,7 +692,8 @@
                 "save": "儲存",
                 "copyName": "複製名稱",
                 "delete": "刪除",
-                "confirmDelete": "確認刪除"
+                "confirmDelete": "確認刪除",
+                "export": "匯出除錯資訊"
             }
         },
         "form": {

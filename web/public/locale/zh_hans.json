@@ -44,7 +44,9 @@
         "group": "分组",
         "model": "价格",
         "log": "日志",
-        "setting": "设置"
+        "setting": "设置",
+        "collapse": "折叠侧边栏",
+        "expand": "展开侧边栏"
     },
     "toolbar": {
         "popover": {
@@ -634,7 +636,9 @@
             "deleteFailed": "删除失败",
             "pinned": "已置顶",
             "unpinned": "已取消置顶",
-            "pinFailed": "置顶操作失败"
+            "pinFailed": "置顶操作失败",
+            "exported": "已导出分组调试信息",
+            "exportFailed": "导出失败"
         },
         "pin": {
             "pin": "置顶",
@@ -688,7 +692,8 @@
                 "save": "保存",
                 "copyName": "复制名称",
                 "delete": "删除",
-                "confirmDelete": "确认删除"
+                "confirmDelete": "确认删除",
+                "export": "导出调试信息"
             }
         },
         "form": {

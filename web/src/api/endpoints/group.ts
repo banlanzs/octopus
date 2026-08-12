@@ -182,6 +182,22 @@ export function useGroupList() {
 }
 
 /**
+ * 导出分组调试信息（调度策略 + 每条目的模型/渠道/健康度）为 JSON 文件并触发下载。
+ * 后端负责 key 脱敏；此处仅将接口返回直接落盘。
+ */
+export async function exportGroupJson(groupId: number, groupName?: string) {
+    const data = await apiClient.get<unknown>(`/api/v1/group/export/${groupId}`);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = (groupName ?? `group-${groupId}`).replace(/[^\w一-龥-]+/g, '-');
+    a.href = url;
+    a.download = `octopus-group-${safeName}-${groupId}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+/**
  * 创建分组 Hook
  * 
  * @example
