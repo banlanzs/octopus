@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 )
 
@@ -469,6 +470,30 @@ func materializeDeepSeekThinkingBlocks(request *model.InternalLLMRequest) {
 			// thinkingParts 为空，保留原 MultipleContent 即可。
 			parts := append(thinkingParts, deepSeekTextParts(msg)...)
 			msg.Content = model.MessageContent{MultipleContent: parts}
+		} else if len(msg.ToolCalls) > 0 {
+			// 历史中"做了工具调用但无任何 thinking 内容"的 assistant 消息
+			// （同一会话思考关闭时生成的轮次）：DeepSeek thinking-mode 契约
+			// 要求此类消息也必须回传 thinking，否则上游 400
+			// ("The reasoning_content in the thinking mode must be passed back
+			// to the API" / "content[].thinking ...")。补占位块 + 顶层字段，
+			// 参考 Anthropic 透传路径 ensureDeepSeekThinkingReplay 的处理。
+			thinking := ""
+			sig := uuid.NewString()
+			placeholder := model.MessageContentPart{
+				Type:      "thinking",
+				Thinking:  &thinking,
+				Signature: &sig,
+			}
+			parts := append([]model.MessageContentPart{placeholder}, deepSeekTextParts(msg)...)
+			msg.Content = model.MessageContent{MultipleContent: parts}
+			// 顶层 reasoning_content 需要非空值（json omitempty 会省略空串，
+			// DeepSeek V3 兼容层/Console Go 校验字段存在性）。
+			rc := " "
+			msg.ReasoningContent = &rc
+			msg.Reasoning = nil
+			msg.ReasoningSignature = nil
+			msg.ReasoningBlocks = nil
+			continue
 		}
 		// 同时保留顶层 reasoning_content：DeepSeek 官方（V3 兼容层）与部分
 		// 中转站（如 Console Go）要求 thinking 以 reasoning_content 顶层字段
