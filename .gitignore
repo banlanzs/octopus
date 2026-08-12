@@ -17,6 +17,11 @@ MEMORY.md
 # Temporary go test logs
 .gotest*.log
 
+# SQLite database files (may contain runtime credentials)
+*.db
+*.sqlite
+*.sqlite3
+
 # Local request debugging logs
 request-logs/
 
