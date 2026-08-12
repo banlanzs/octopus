@@ -18,6 +18,10 @@ const (
 	SettingKeyRelayLogKeepPeriod               SettingKey = "relay_log_keep_period"                // 日志保存时间范围(天)
 	SettingKeyRelayLogKeepEnabled              SettingKey = "relay_log_keep_enabled"               // 是否保留历史日志
 	SettingKeyRelayLogFailedDetailEnabled      SettingKey = "relay_log_failed_detail_enabled"      // 失败尝试是否记录请求体/响应体详情
+	SettingKeyQualityFailEnabled               SettingKey = "relay_quality_fail_enabled"           // 质量失败检测开关（成功但输出异常→调度降权/冷却）
+	SettingKeyQualityFailMinOutput             SettingKey = "relay_quality_fail_min_output"        // 质量失败输出 token 阈值（0=不限制）
+	SettingKeyQualityFailMinMaxTokens          SettingKey = "relay_quality_fail_min_max_tokens"    // 排除小 max_tokens 请求（guardrail 等正常短输出）
+	SettingKeyQualityFailCooldown              SettingKey = "relay_quality_fail_cooldown"          // 质量失败 key 级冷却秒数（0=仅降权不冷却）
 	SettingKeyCORSAllowOrigins                 SettingKey = "cors_allow_origins"                   // 跨域白名单(逗号分隔, 如 "example.com,example2.com"). 为空不允许跨域, "*"允许所有
 	SettingKeyCircuitBreakerThreshold          SettingKey = "circuit_breaker_threshold"            // 熔断触发阈值（连续失败次数）
 	SettingKeyCircuitBreakerChannelThreshold   SettingKey = "circuit_breaker_channel_threshold"     // 渠道级熔断触发阈值（连续渠道级失败次数）
@@ -90,6 +94,10 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyRelayLogKeepPeriod, Value: "7"},               // 默认日志保存7天
 		{Key: SettingKeyRelayLogKeepEnabled, Value: "true"},           // 默认保留历史日志
 		{Key: SettingKeyRelayLogFailedDetailEnabled, Value: "true"},   // 默认记录失败尝试请求详情
+		{Key: SettingKeyQualityFailEnabled, Value: "true"},            // 默认启用质量失败检测（成功但输出异常→降权/冷却）
+		{Key: SettingKeyQualityFailMinOutput, Value: "100"},           // 输出 <100 token 视为可疑
+		{Key: SettingKeyQualityFailMinMaxTokens, Value: "1024"},       // max_tokens <1024 的请求（guardrail）不判定
+		{Key: SettingKeyQualityFailCooldown, Value: "60"},             // 质量失败冷却 60 秒（0=仅降权）
 		{Key: SettingKeyCircuitBreakerThreshold, Value: "5"},          // 默认连续失败5次触发熔断
 		{Key: SettingKeyCircuitBreakerChannelThreshold, Value: "3"},   // 默认连续3次渠道级失败触发渠道熔断
 		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},          // 默认基础冷却60秒
@@ -192,7 +200,8 @@ func (s *Setting) Validate() error {
 	case SettingKeyAutoRankFeedbackEwma:
 		// EWMA 新样本权重必须 <1.0（存百分比 1-99），避免 alpha=1 时完全丢弃历史。
 		return validateIntRange(s.Value, 1, 99)
-	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval:
+	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval,
+		SettingKeyQualityFailMinOutput, SettingKeyQualityFailMinMaxTokens, SettingKeyQualityFailCooldown:
 		value, err := strconv.Atoi(s.Value)
 		if err != nil {
 			return fmt.Errorf("setting value must be an integer")
@@ -201,7 +210,7 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("setting value must be non-negative")
 		}
 		return nil
-	case SettingKeyRelayLogKeepEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoRankEnabled, SettingKeyAutoRankChannelFactorEnabled, SettingKeyAutoRankTTFBEnabled, SettingKeyAutoRankFeedbackEnabled, SettingKeyWebDAVIncludeStats:
+	case SettingKeyRelayLogKeepEnabled, SettingKeyQualityFailEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoRankEnabled, SettingKeyAutoRankChannelFactorEnabled, SettingKeyAutoRankTTFBEnabled, SettingKeyAutoRankFeedbackEnabled, SettingKeyWebDAVIncludeStats:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("setting value must be true or false")
 		}

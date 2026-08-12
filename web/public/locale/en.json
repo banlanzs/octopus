@@ -215,6 +215,26 @@
             },
             "hint": "When a channel fails consecutively up to the threshold, circuit breaker trips. Cooldown grows exponentially up to the max cooldown"
         },
+        "qualityFail": {
+            "title": "Quality Failure Detection",
+            "hint": "Detects \"HTTP success but abnormal output\" (e.g. upstream ends the turn early in a tool loop with a single sentence). On hit: cools down the channel key and lowers its auto-rank score so subsequent requests seamlessly switch to other channels; auto-probe recovers after cooldown",
+            "enabled": {
+                "label": "Enable Quality Failure Detection",
+                "description": "Tool-loop responses with output tokens below the threshold and no tool call are treated as quality failures"
+            },
+            "minOutput": {
+                "label": "Output Token Threshold",
+                "placeholder": "Enter threshold (0 = off)"
+            },
+            "minMaxTokens": {
+                "label": "Min max_tokens to Judge",
+                "placeholder": "Enter lower bound"
+            },
+            "cooldown": {
+                "label": "Cooldown (seconds)",
+                "placeholder": "Enter seconds (0 = rank only)"
+            }
+        },
         "outlierRetirement": {
             "title": "Passive Outlier Retirement",
             "hint": "Temporarily disables site projected channels that keep failing on real requests (disabled, never deleted), then probes them periodically and re-enables them once they recover. Before disabling, sibling channels of the same site are cross-checked and a probe request confirms the failure to avoid false positives; at least one enabled channel is always kept per account. Applies only to site projected channels. Off by default.",

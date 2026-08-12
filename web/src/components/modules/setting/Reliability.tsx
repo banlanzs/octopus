@@ -51,6 +51,7 @@ export function SettingReliability() {
     const t = useTranslations('setting');
     const outlier = useSettingToggle(SettingKey.OutlierRetireEnabled);
     const groupHealth = useSettingToggle(SettingKey.GroupHealthEnabled);
+    const qualityFail = useSettingToggle(SettingKey.QualityFailEnabled);
     const autoRank = useSettingToggle(SettingKey.AutoRankEnabled);
     const channelFactor = useSettingToggle(SettingKey.AutoRankChannelFactorEnabled);
     const ttfb = useSettingToggle(SettingKey.AutoRankTTFBEnabled);
@@ -83,6 +84,34 @@ export function SettingReliability() {
                 placeholder={t('circuitBreaker.maxCooldown.placeholder')}
                 icon={TimerOff}
             />
+
+            {/* 质量失败检测（成功但输出异常→调度降权/冷却） */}
+            <SettingSection title={t('qualityFail.title')} tooltip={t('qualityFail.hint')} />
+            <SettingRow label={t('qualityFail.enabled.label')} tooltip={t('qualityFail.enabled.description')}>
+                <Switch checked={qualityFail.enabled} onCheckedChange={qualityFail.toggle} />
+            </SettingRow>
+            {qualityFail.enabled && (
+                <>
+                    <NumberFieldRow
+                        settingKey={SettingKey.QualityFailMinOutput}
+                        label={t('qualityFail.minOutput.label')}
+                        placeholder={t('qualityFail.minOutput.placeholder')}
+                        icon={Hash}
+                    />
+                    <NumberFieldRow
+                        settingKey={SettingKey.QualityFailMinMaxTokens}
+                        label={t('qualityFail.minMaxTokens.label')}
+                        placeholder={t('qualityFail.minMaxTokens.placeholder')}
+                        icon={Hash}
+                    />
+                    <NumberFieldRow
+                        settingKey={SettingKey.QualityFailCooldown}
+                        label={t('qualityFail.cooldown.label')}
+                        placeholder={t('qualityFail.cooldown.placeholder')}
+                        icon={Timer}
+                    />
+                </>
+            )}
 
             {/* 被动离群退役 */}
             <SettingSection title={t('outlierRetirement.title')} tooltip={t('outlierRetirement.hint')} />

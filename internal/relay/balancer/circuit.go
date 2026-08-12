@@ -35,6 +35,7 @@ type circuitEntry struct {
 	TripCount           int // 累计熔断触发次数（用于指数退避）
 	HalfOpenSince       time.Time
 	lastSeen            time.Time // 最近一次读写时间，供内存回收（ReapBreakers）
+	qualityCooldown     time.Duration // 质量失败冷却（0=未设置，走 TripCount 指数退避）
 	mu                  sync.Mutex
 }
 
@@ -287,6 +288,11 @@ func isTrippedKey(key string) (tripped bool, remaining time.Duration) {
 
 	case StateOpen:
 		cooldown := GetCooldown(entry.TripCount)
+		// 质量失败使用固定冷却（不参与指数退避），且 HalfOpen 探测成功后
+		// 由 RecordSuccess 清理 qualityCooldown。
+		if entry.qualityCooldown > 0 {
+			cooldown = entry.qualityCooldown
+		}
 		elapsed := time.Since(entry.LastFailureTime)
 		if elapsed >= cooldown {
 			now := time.Now()
@@ -318,6 +324,29 @@ func isTrippedKey(key string) (tripped bool, remaining time.Duration) {
 	}
 }
 
+// RecordQualityFailure 记录一次质量失败（HTTP 成功但输出异常，如工具循环中
+// 被上游提前终止）。直接置 Open 进入指定时长的冷却，TripCount 不递增（不触发
+// 指数退避）；冷却结束后走 HalfOpen 自动探测恢复。质量失败不影响已下发的
+// 成功响应，仅让后续请求无感切换到其他渠道。
+func RecordQualityFailure(channelID, keyID int, modelName string, cooldown time.Duration) {
+	key := circuitKey(channelID, keyID, modelName)
+	entry := getOrCreateEntry(key)
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	now := time.Now()
+	entry.LastFailureTime = now
+	entry.HalfOpenSince = time.Time{}
+	entry.lastSeen = now
+	entry.State = StateOpen
+	if cooldown <= 0 {
+		cooldown = time.Second
+	}
+	entry.qualityCooldown = cooldown
+	log.Warnf("circuit breaker [%s] quality failure -> Open (cooldown=%v)", key, cooldown)
+}
+
 // RecordSuccess 记录成功，重置熔断器状态
 func RecordSuccess(channelID, keyID int, modelName string) {
 	key := circuitKey(channelID, keyID, modelName)
@@ -340,6 +369,7 @@ func RecordSuccess(channelID, keyID int, modelName string) {
 	entry.ConsecutiveFailures = 0
 	entry.TripCount = 0
 	entry.HalfOpenSince = time.Time{}
+	entry.qualityCooldown = 0
 }
 
 // RecordFailure 记录失败，可能触发熔断。

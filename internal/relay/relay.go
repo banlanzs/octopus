@@ -331,6 +331,14 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			recordAutoRankResult(group, channel.ID, internalRequest.Model, true, result.StatusCode, durationMS, ttfbMS)
 			balancer.RecordChannelSuccess(channel.ID)
 
+			// ===== 质量失败检测 =====
+			// HTTP 成功但输出异常（工具循环中被上游提前终止，如中转站返回
+			// 极短输出 end_turn）：记 AutoRank 失败样本 + key 级冷却，使后续
+			// 请求无感切换到其他渠道。不影响已下发的成功响应。
+			if outputTokens := metrics.Stats.OutputToken; isQualityFailureResponse(internalRequest, outputTokens) {
+				recordQualityFailure(group, channel.ID, usedKey.ID, internalRequest.Model, outputTokens, durationMS, ttfbMS)
+			}
+
 			// === HTTP Replay 状态保存 ===
 			// 成功后，如果是 OpenAI Responses HTTP 请求，保存 replay 状态供后续续接
 			// 注意：exact replay 请求成功后也需要保存新状态，否则只能续接一轮
