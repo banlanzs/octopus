@@ -278,6 +278,10 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "force_deep_seek_thinking")
 		updates.ForceDeepSeekThinking = *req.ForceDeepSeekThinking
 	}
+	if req.ProbeEnabled != nil {
+		selectFields = append(selectFields, "probe_enabled")
+		updates.ProbeEnabled = *req.ProbeEnabled
+	}
 	if req.PriceMultiplier != nil {
 		selectFields = append(selectFields, "price_multiplier")
 		updates.PriceMultiplier = *req.PriceMultiplier

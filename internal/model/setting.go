@@ -68,6 +68,10 @@ const (
 	SettingKeyAutoRankFeedbackEwma             SettingKey = "auto_rank_feedback_ewma"               // 反馈纠偏：actualShare EWMA 新样本权重(百分比)
 	SettingKeyAutoRankFeedbackTolerance        SettingKey = "auto_rank_feedback_tolerance"          // 反馈纠偏：actualShare 超额容忍度(百分比)
 	SettingKeyAutoRankFeedbackPenalty          SettingKey = "auto_rank_feedback_penalty"            // 反馈纠偏：超额降权强度(百分比)
+	SettingKeyAutoRankProbeEnabled             SettingKey = "auto_rank_probe_enabled"               // 主动探测总开关（为欠采样候选补成功率样本）
+	SettingKeyAutoRankProbeInterval            SettingKey = "auto_rank_probe_interval"              // 主动探测任务轮询间隔(秒)
+	SettingKeyAutoRankProbeMaxPerRound         SettingKey = "auto_rank_probe_max_per_round"         // 主动探测单轮最大探测请求数
+	SettingKeyAutoRankProbeCooldown            SettingKey = "auto_rank_probe_cooldown"              // 同一候选两次探测的最小间隔(秒)
 	SettingKeyApiBaseUrl                       SettingKey = "api_base_url"                         // 对外服务基础地址，用于一键导出客户端配置，为空时不显示导出入口
 	SettingKeyWebDAVURL                        SettingKey = "webdav_url"                            // WebDAV 服务器地址
 	SettingKeyWebDAVUsername                   SettingKey = "webdav_username"                       // WebDAV 用户名
@@ -144,6 +148,10 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyAutoRankFeedbackEwma, Value: "30"},           // EWMA 新样本权重 0.3
 		{Key: SettingKeyAutoRankFeedbackTolerance, Value: "10"},      // 超额容忍度 0.10
 		{Key: SettingKeyAutoRankFeedbackPenalty, Value: "30"},        // 超额降权强度 0.30/单位超额
+		{Key: SettingKeyAutoRankProbeEnabled, Value: "false"},       // 默认关闭主动探测：中转站/个人站点可能拒绝无业务意图的探测请求
+		{Key: SettingKeyAutoRankProbeInterval, Value: "300"},        // 默认每 5 分钟扫描一次欠采样候选
+		{Key: SettingKeyAutoRankProbeMaxPerRound, Value: "10"},      // 单轮最多 10 次探测，限制成本与风控面
+		{Key: SettingKeyAutoRankProbeCooldown, Value: "600"},        // 同一候选 10 分钟内不重复探测
 		{Key: SettingKeyApiBaseUrl, Value: ""},                  // 默认为空，不显示客户端导出入口
 		{Key: SettingKeyWebDAVURL, Value: ""},                   // 默认为空，未配置
 		{Key: SettingKeyWebDAVUsername, Value: ""},              // 默认为空
@@ -176,6 +184,7 @@ func (s *Setting) Validate() error {
 		SettingKeyOutlierReapMinutes, SettingKeyOutlierCFRecoverMinutes,
 		SettingKeyAutoRankInterval, SettingKeyAutoRankMinSamples,
 		SettingKeyAutoRankChannelMinSamples,
+		SettingKeyAutoRankProbeInterval, SettingKeyAutoRankProbeMaxPerRound, SettingKeyAutoRankProbeCooldown,
 		SettingKeyWebDAVRetentionCount:
 		// 时间窗/样本/连击/间隔等：0 或负值无意义，下限为 1。
 		return validateIntMin(s.Value, 1)
@@ -213,7 +222,7 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("setting value must be non-negative")
 		}
 		return nil
-	case SettingKeyRelayLogKeepEnabled, SettingKeyQualityFailEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoRankEnabled, SettingKeyAutoRankChannelFactorEnabled, SettingKeyAutoRankTTFBEnabled, SettingKeyAutoRankFeedbackEnabled, SettingKeyWebDAVIncludeStats:
+	case SettingKeyRelayLogKeepEnabled, SettingKeyQualityFailEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoRankEnabled, SettingKeyAutoRankChannelFactorEnabled, SettingKeyAutoRankTTFBEnabled, SettingKeyAutoRankFeedbackEnabled, SettingKeyAutoRankProbeEnabled, SettingKeyWebDAVIncludeStats:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("setting value must be true or false")
 		}

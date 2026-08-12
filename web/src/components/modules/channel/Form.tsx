@@ -41,6 +41,7 @@ export interface ChannelFormData {
     enabled: boolean;
     auto_sync: boolean;
     force_deep_seek_thinking: boolean;
+    probe_enabled: boolean;
     auto_group: AutoGroupType;
     match_regex: string;
 }
@@ -602,7 +603,7 @@ export function ChannelForm({
                     />
                     <span className="text-sm font-medium text-card-foreground">{t('enabled')}</span>
                 </label>
-                <div className="flex items-center gap-6">
+                <div className="flex flex-wrap items-center gap-6">
                     <label className="flex items-center gap-2 cursor-pointer">
                         <Switch
                             checked={formData.auto_sync}
@@ -616,6 +617,13 @@ export function ChannelForm({
                             onCheckedChange={(checked) => onFormDataChange({ ...formData, force_deep_seek_thinking: checked })}
                         />
                         <span className="text-sm text-card-foreground">{t('forceDeepSeekThinking')}</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer" title={t('probeEnabledHint')}>
+                        <Switch
+                            checked={formData.probe_enabled}
+                            onCheckedChange={(checked) => onFormDataChange({ ...formData, probe_enabled: checked })}
+                        />
+                        <span className="text-sm text-card-foreground">{t('probeEnabled')}</span>
                     </label>
                 </div>
             </div>

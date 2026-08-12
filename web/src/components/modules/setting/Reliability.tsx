@@ -1,7 +1,7 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import { Compass, Gauge, Hash, HeartPulse, Layers, ListChecks, ShieldCheck, Timer, TimerOff, type LucideIcon } from 'lucide-react';
+import { Compass, Gauge, Hash, HeartPulse, Layers, ListChecks, Radar, ShieldCheck, Timer, TimerOff, type LucideIcon } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { SettingKey } from '@/api/endpoints/setting';
@@ -56,6 +56,7 @@ export function SettingReliability() {
     const channelFactor = useSettingToggle(SettingKey.AutoRankChannelFactorEnabled);
     const ttfb = useSettingToggle(SettingKey.AutoRankTTFBEnabled);
     const feedback = useSettingToggle(SettingKey.AutoRankFeedbackEnabled);
+    const probe = useSettingToggle(SettingKey.AutoRankProbeEnabled);
 
     return (
         <SettingCard icon={ShieldCheck} title={t('reliability.title')}>
@@ -307,6 +308,39 @@ export function SettingReliability() {
                                 icon={Gauge}
                                 min={0}
                                 max={100}
+                            />
+                        </>
+                    )}
+
+                    {/* 主动探测：为欠采样候选补成功率样本（渠道需单独开启允许探测） */}
+                    <SettingRow label={t('autoRank.probe.label')} tooltip={t('autoRank.probe.description')}>
+                        <Switch checked={probe.enabled} onCheckedChange={probe.toggle} />
+                    </SettingRow>
+                    {probe.enabled && (
+                        <>
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankProbeInterval}
+                                label={t('autoRank.probeInterval.label')}
+                                placeholder={t('autoRank.probeInterval.placeholder')}
+                                tooltip={t('autoRank.probeInterval.description')}
+                                icon={Radar}
+                                min={1}
+                            />
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankProbeMaxPerRound}
+                                label={t('autoRank.probeMaxPerRound.label')}
+                                placeholder={t('autoRank.probeMaxPerRound.placeholder')}
+                                tooltip={t('autoRank.probeMaxPerRound.description')}
+                                icon={Radar}
+                                min={1}
+                            />
+                            <NumberFieldRow
+                                settingKey={SettingKey.AutoRankProbeCooldown}
+                                label={t('autoRank.probeCooldown.label')}
+                                placeholder={t('autoRank.probeCooldown.placeholder')}
+                                tooltip={t('autoRank.probeCooldown.description')}
+                                icon={Radar}
+                                min={1}
                             />
                         </>
                     )}

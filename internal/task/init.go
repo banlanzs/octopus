@@ -100,6 +100,13 @@ func Init() {
 	}
 	Register(string(model.SettingKeyAutoRankInterval), time.Duration(autoRankIntervalSec)*time.Second, false, AutoRankTask)
 
+	// 注册自动排序主动探测任务（默认间隔 300 秒，总开关与渠道开关在任务内判断）
+	autoRankProbeIntervalSec, err := op.SettingGetInt(model.SettingKeyAutoRankProbeInterval)
+	if err != nil || autoRankProbeIntervalSec <= 0 {
+		autoRankProbeIntervalSec = 300
+	}
+	Register(string(model.SettingKeyAutoRankProbeInterval), time.Duration(autoRankProbeIntervalSec)*time.Second, false, AutoRankProbeTask)
+
 	// 注册被动离群退役(POR)任务（默认间隔 2 分钟，总开关在任务内判断）
 	outlierIntervalMinutes, err := op.SettingGetInt(model.SettingKeyOutlierRetireInterval)
 	if err != nil || outlierIntervalMinutes <= 0 {

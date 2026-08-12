@@ -392,6 +392,25 @@
             "feedbackPenalty": {
                 "label": "Overshoot penalty strength (%)",
                 "placeholder": "30"
+            },
+            "probe": {
+                "label": "Active probing",
+                "description": "Sends minimal probe requests to candidates short on real samples, so zero-traffic ones still reveal failures. Probes count toward success rate only — never latency, and never toward the sample-sufficiency tier. Each channel must also enable \"Allow active probing\": relay stations and personal sites often reject liveness checks with no business intent."
+            },
+            "probeInterval": {
+                "label": "Probe interval (s)",
+                "placeholder": "300",
+                "description": "How often under-sampled candidates are scanned and probed."
+            },
+            "probeMaxPerRound": {
+                "label": "Max probes per round",
+                "placeholder": "10",
+                "description": "Upper bound of probe requests per round; the most under-sampled candidates go first."
+            },
+            "probeCooldown": {
+                "label": "Per-candidate probe cooldown (s)",
+                "placeholder": "600",
+                "description": "Minimum gap between two probes of the same channel-model pair."
             }
         },
         "saved": "Saved",
@@ -761,6 +780,7 @@
                 "ttfb": "First token",
                 "samples": "Samples",
                 "failures": "Failures",
+                "probeSamples": "probes",
                 "rank": "Dynamic rank",
                 "share": "Target / actual share",
                 "empty": "No samples yet (awaiting deterministic exploration)",
@@ -1015,6 +1035,8 @@
             "typeVolcengine": "Volcengine",
             "autoSync": "Auto Sync",
             "forceDeepSeekThinking": "DeepSeek Thinking Param",
+            "probeEnabled": "Allow active probing",
+            "probeEnabledHint": "Lets auto-ranking send minimal probe requests (1 token) to this channel to refresh health data. Off by default: relay stations and personal sites may reject liveness checks with no business intent. Manual group health checks are unaffected.",
             "wsMode": "Responses WS Mode",
             "wsModeInherit": "Inherit global",
             "wsModePassthrough": "Passthrough",

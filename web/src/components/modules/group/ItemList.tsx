@@ -101,7 +101,8 @@ function HealthBadge({ rank }: { rank: AutoRankHealth }) {
                             </span>
                             <span>
                                 {t('samples')}: <span className="font-medium">{rank.samples}</span>（{t('failures')}{' '}
-                                {rank.failures}）
+                                {rank.failures}
+                                {rank.probe_samples > 0 ? `，${t('probeSamples')} ${rank.probe_samples}` : ''}）
                             </span>
                         </>
                     ) : (

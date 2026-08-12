@@ -80,6 +80,11 @@ type Channel struct {
 	// 参数并重组 content[].thinking 块回传。用于中转站 DeepSeek 模型名不含
 	// "deepseek" 的渠道（否则会被当作普通 OpenAI 兼容模型剥离 thinking）。
 	ForceDeepSeekThinking bool `json:"force_deep_seek_thinking" gorm:"default:false"`
+	// ProbeEnabled 是否允许系统自动向该渠道发起探测请求（AutoRank 主动补样本）。
+	// 默认关闭：中转站与个人站点通常拒绝无业务意图的极小请求（ping + 1 token），
+	// 甚至会将其判定为异常流量，须由用户确认该渠道可接受探测后再显式开启。
+	// 只约束自动探测，不影响用户手动触发的分组健康检查。
+	ProbeEnabled bool `json:"probe_enabled" gorm:"default:false"`
 	// PriceMultiplier 渠道计费倍率。最终单价 = 模型价格 × 倍率。
 	// 默认 1；0 视为 1（兼容旧数据未设置）。
 	PriceMultiplier       float64 `json:"price_multiplier" gorm:"default:1;not null"`
@@ -163,6 +168,8 @@ type ChannelUpdateRequest struct {
 	MatchRegex    *string                `json:"match_regex,omitempty"`
 	// ForceDeepSeekThinking 强制启用 DeepSeek `thinking` 参数透传（中转站 DeepSeek 别名渠道）。
 	ForceDeepSeekThinking *bool `json:"force_deep_seek_thinking,omitempty"`
+	// ProbeEnabled 是否允许系统自动向该渠道发起探测请求（AutoRank 主动补样本）。
+	ProbeEnabled *bool `json:"probe_enabled,omitempty"`
 	// PriceMultiplier 渠道计费倍率。最终单价 = 模型价格 × 倍率。
 	PriceMultiplier *float64 `json:"price_multiplier,omitempty"`
 

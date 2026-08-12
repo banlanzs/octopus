@@ -392,6 +392,25 @@
             "feedbackPenalty": {
                 "label": "超额降权强度（%）",
                 "placeholder": "30"
+            },
+            "probe": {
+                "label": "主动探测",
+                "description": "为真实样本不足的候选发起极小探测请求补充成功率数据，让零流量候选也能暴露故障。探测只计成功率、不计延迟，也不会顶替真实样本参与排序档位。还需要在渠道中单独开启「允许主动探测」——中转站与个人站点可能拒绝这类无业务意图的测活请求。"
+            },
+            "probeInterval": {
+                "label": "探测间隔（秒）",
+                "placeholder": "300",
+                "description": "扫描欠采样候选并发起探测的周期。"
+            },
+            "probeMaxPerRound": {
+                "label": "单轮探测上限",
+                "placeholder": "10",
+                "description": "每轮最多发起的探测请求数，欠采样最严重的候选优先。"
+            },
+            "probeCooldown": {
+                "label": "同候选探测冷却（秒）",
+                "placeholder": "600",
+                "description": "同一渠道模型两次探测的最小间隔，避免持续打扰上游。"
             }
         },
         "saved": "已保存",
@@ -761,6 +780,7 @@
                 "ttfb": "首 Token",
                 "samples": "采样",
                 "failures": "失败",
+                "probeSamples": "其中探测",
                 "rank": "动态排名",
                 "share": "目标 / 实际占比",
                 "empty": "暂无采样（等待确定性探索）",
@@ -1015,6 +1035,8 @@
             "typeVolcengine": "火山引擎",
             "autoSync": "自动同步",
             "forceDeepSeekThinking": "启用 DeepSeek thinking 参数",
+            "probeEnabled": "允许主动探测",
+            "probeEnabledHint": "允许自动排序向该渠道发送极小探测请求（1 token）以补充健康数据。中转站与个人站点可能拒绝这类无业务意图的测活请求，故默认关闭。不影响手动触发的分组健康检查。",
             "wsMode": "Responses WS 模式",
             "wsModeInherit": "跟随全局",
             "wsModePassthrough": "直通",

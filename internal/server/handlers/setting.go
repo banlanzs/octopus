@@ -69,7 +69,7 @@ func setSetting(c *gin.Context) {
 		return
 	}
 	switch setting.Key {
-	case model.SettingKeyAutoRankInterval:
+	case model.SettingKeyAutoRankInterval, model.SettingKeyAutoRankProbeInterval:
 		seconds, err := strconv.Atoi(setting.Value)
 		if err != nil {
 			resp.Error(c, http.StatusBadRequest, err.Error())

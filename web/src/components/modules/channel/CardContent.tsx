@@ -61,6 +61,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         custom_model: channel.custom_model,
         auto_sync: channel.auto_sync,
         force_deep_seek_thinking: channel.force_deep_seek_thinking ?? false,
+        probe_enabled: channel.probe_enabled ?? false,
         auto_group: channel.auto_group,
         match_regex: channel.match_regex ?? '',
     });
@@ -100,6 +101,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         }
         if (formData.auto_sync !== channel.auto_sync) req.auto_sync = formData.auto_sync;
         if (formData.force_deep_seek_thinking !== (channel.force_deep_seek_thinking ?? false)) req.force_deep_seek_thinking = formData.force_deep_seek_thinking;
+        if (formData.probe_enabled !== (channel.probe_enabled ?? false)) req.probe_enabled = formData.probe_enabled;
         if (formData.auto_group !== channel.auto_group) req.auto_group = formData.auto_group;
         if ((formData.ws_mode ?? 'inherit') !== (channel.ws_mode ?? 'inherit')) req.ws_mode = formData.ws_mode;
 

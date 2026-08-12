@@ -72,6 +72,8 @@ export interface ChannelModelPricePayload {
 export interface AutoRankHealth {
     /** 时间窗口内采样请求数 */
     samples: number;
+    /** samples 中来自主动探测的条数：只补成功率，不计延迟、不推进样本充足判定 */
+    probe_samples: number;
     /** 窗口内失败请求数 */
     failures: number;
     /** 窗口成功率 0~1 */
