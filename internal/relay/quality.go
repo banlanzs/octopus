@@ -45,6 +45,16 @@ func qualityFailCooldown() time.Duration {
 	return time.Duration(v) * time.Second
 }
 
+// slowCancelPenaltySec 慢取消惩罚阈值（秒）：客户端超时取消且上游无响应超此时长，
+// 判定渠道异常（长时间无首 token）并记失败/降权。0=禁用。
+func slowCancelPenaltySec() int64 {
+	v, err := op.SettingGetInt(dbmodel.SettingKeySlowCancelPenaltySec)
+	if err != nil || v < 0 {
+		return 10
+	}
+	return int64(v)
+}
+
 // isQualityFailureResponse 判定"成功但输出异常"：
 //   - 输出 token 低于阈值（0 表示不限制）
 //   - 请求 max_tokens 足够大（排除 guardrail/短输出请求的正常短响应）

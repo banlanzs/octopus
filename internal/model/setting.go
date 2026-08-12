@@ -22,6 +22,7 @@ const (
 	SettingKeyQualityFailMinOutput             SettingKey = "relay_quality_fail_min_output"        // 质量失败输出 token 阈值（0=不限制）
 	SettingKeyQualityFailMinMaxTokens          SettingKey = "relay_quality_fail_min_max_tokens"    // 排除小 max_tokens 请求（guardrail 等正常短输出）
 	SettingKeyQualityFailCooldown              SettingKey = "relay_quality_fail_cooldown"          // 质量失败 key 级冷却秒数（0=仅降权不冷却）
+	SettingKeySlowCancelPenaltySec             SettingKey = "relay_slow_cancel_penalty_sec"        // 慢取消惩罚阈值（秒）：客户端超时取消且上游无响应超此时长→渠道记失败/降权（0=禁用）
 	SettingKeyCORSAllowOrigins                 SettingKey = "cors_allow_origins"                   // 跨域白名单(逗号分隔, 如 "example.com,example2.com"). 为空不允许跨域, "*"允许所有
 	SettingKeyCircuitBreakerThreshold          SettingKey = "circuit_breaker_threshold"            // 熔断触发阈值（连续失败次数）
 	SettingKeyCircuitBreakerChannelThreshold   SettingKey = "circuit_breaker_channel_threshold"     // 渠道级熔断触发阈值（连续渠道级失败次数）
@@ -98,6 +99,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyQualityFailMinOutput, Value: "100"},           // 输出 <100 token 视为可疑
 		{Key: SettingKeyQualityFailMinMaxTokens, Value: "1024"},       // max_tokens <1024 的请求（guardrail）不判定
 		{Key: SettingKeyQualityFailCooldown, Value: "60"},             // 质量失败冷却 60 秒（0=仅降权）
+		{Key: SettingKeySlowCancelPenaltySec, Value: "10"},            // 慢取消惩罚阈值 10 秒（0=禁用）
 		{Key: SettingKeyCircuitBreakerThreshold, Value: "5"},          // 默认连续失败5次触发熔断
 		{Key: SettingKeyCircuitBreakerChannelThreshold, Value: "3"},   // 默认连续3次渠道级失败触发渠道熔断
 		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},          // 默认基础冷却60秒
@@ -201,7 +203,8 @@ func (s *Setting) Validate() error {
 		// EWMA 新样本权重必须 <1.0（存百分比 1-99），避免 alpha=1 时完全丢弃历史。
 		return validateIntRange(s.Value, 1, 99)
 	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval,
-		SettingKeyQualityFailMinOutput, SettingKeyQualityFailMinMaxTokens, SettingKeyQualityFailCooldown:
+		SettingKeyQualityFailMinOutput, SettingKeyQualityFailMinMaxTokens, SettingKeyQualityFailCooldown,
+		SettingKeySlowCancelPenaltySec:
 		value, err := strconv.Atoi(s.Value)
 		if err != nil {
 			return fmt.Errorf("setting value must be an integer")

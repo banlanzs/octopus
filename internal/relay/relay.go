@@ -384,6 +384,16 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			return
 		}
 		if result.Canceled {
+			// 慢取消惩罚：客户端超时取消且未写任何字节（上游长时间无首 token）——
+			// 记熔断失败 + AutoRank 失败样本，使该渠道被排挤，后续请求无感走其他渠道。
+			// 快速取消（用户主动停止）不惩罚，避免误伤。
+			if !result.Written && slowCancelPenaltySec() > 0 && result.DurationMS > slowCancelPenaltySec()*1000 {
+				balancer.RecordFailure(channel.ID, usedKey.ID, internalRequest.Model, balancer.FailureHard)
+				slowDurationMS, slowTTFBMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
+				recordAutoRankResult(group, channel.ID, internalRequest.Model, false, 0, slowDurationMS, slowTTFBMS)
+				log.Warnf("slow cancel penalty: channel=%d key=%d model=%s waited=%dms without first token (client timed out)",
+					channel.ID, usedKey.ID, internalRequest.Model, result.DurationMS)
+			}
 			metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
 			return
 		}
