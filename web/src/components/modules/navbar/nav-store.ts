@@ -9,7 +9,9 @@ interface NavState {
     activeItem: NavItem
     prevItem: NavItem | null
     direction: number
+    expanded: boolean
     setActiveItem: (item: NavItem) => void
+    toggleExpanded: () => void
 }
 
 export const useNavStore = create<NavState>()(
@@ -18,6 +20,7 @@ export const useNavStore = create<NavState>()(
             activeItem: 'home',
             prevItem: null,
             direction: 0,
+            expanded: true,
             setActiveItem: (item) => {
                 const { activeItem } = get()
                 const currentIndex = NAV_ORDER.indexOf(activeItem)
@@ -30,6 +33,7 @@ export const useNavStore = create<NavState>()(
                     direction
                 })
             },
+            toggleExpanded: () => set((state) => ({ expanded: !state.expanded })),
         }),
         {
             name: 'nav-storage',
