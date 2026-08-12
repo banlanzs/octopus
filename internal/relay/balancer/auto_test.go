@@ -792,3 +792,57 @@ func testAutoScheduleConfig(exploreRatio float64) autoScheduleConfig {
 		FeedbackUpdateInterval: 10,
 	}
 }
+
+// 探索优化：探索选择跳过渠道级熔断候选，避免探索机会被 relay 层
+// SkipCircuitBreak 跳过（不发请求、不积累样本）。
+func TestAutoScheduleExploreSkipsCircuitTripped(t *testing.T) {
+	Reset()
+	AutoRankReset()
+	const gid = 600
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "tripped"}, AutoRankStats{}, 0),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "healthy"}, AutoRankStats{}, 0),
+	}
+	// 触发 channel 1 渠道级熔断
+	for i := int64(0); i < channelThreshold(); i++ {
+		RecordChannelFailure(1, FailureHard)
+	}
+	cfg := testAutoScheduleConfig(1.0) // 100% 探索：每次调度必进探索分支
+
+	seen := map[string]int{}
+	for i := 0; i < 10; i++ {
+		ordered := scheduleAutoCandidates(gid, candidates, cfg)
+		seen[ordered[0].item.ModelName]++
+	}
+	if seen["tripped"] > 0 {
+		t.Fatalf("探索不应选择熔断候选, got: %v", seen)
+	}
+	if seen["healthy"] == 0 {
+		t.Fatalf("探索应选择健康候选, got: %v", seen)
+	}
+}
+
+// 探索优化：due 池候选全部熔断时回退原池（保持原行为，不 panic）。
+func TestAutoScheduleExploreAllTrippedFallsBack(t *testing.T) {
+	Reset()
+	AutoRankReset()
+	const gid = 601
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "a"}, AutoRankStats{}, 0),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "b"}, AutoRankStats{}, 0),
+	}
+	for i := int64(0); i < channelThreshold(); i++ {
+		RecordChannelFailure(1, FailureHard)
+		RecordChannelFailure(2, FailureHard)
+	}
+	cfg := testAutoScheduleConfig(1.0)
+
+	ordered := scheduleAutoCandidates(gid, candidates, cfg)
+	if len(ordered) == 0 || ordered[0].item.ChannelID == 0 {
+		t.Fatalf("全熔断时应回退原池仍返回主候选, got: %+v", ordered)
+	}
+	// 回退池按 leastRecentlyOffered 选择（未 offer 过时取池中第一个）
+	if ordered[0].item.ChannelID != 1 {
+		t.Fatalf("回退池应保持原顺序, got: %+v", ordered[0])
+	}
+}

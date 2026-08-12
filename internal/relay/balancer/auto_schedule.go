@@ -203,6 +203,18 @@ func scheduleAutoCandidates(groupID int, input []autoCandidate, cfg autoSchedule
 		if len(pool) == 0 {
 			pool = candidates
 		}
+		// 排除渠道级熔断中的候选：探索机会若落到这类候选上，会被 relay 层的
+		// SkipCircuitBreak 直接跳过（不发请求、不积累样本），白费一次探索。
+		// 池中候选全部熔断时回退原池（保持原行为，冷启动极端场景仍可尝试）。
+		explorable := make([]autoCandidate, 0, len(pool))
+		for _, c := range pool {
+			if !autoCandidateCircuitTripped(c) {
+				explorable = append(explorable, c)
+			}
+		}
+		if len(explorable) > 0 {
+			pool = explorable
+		}
 		primary = leastRecentlyOffered(s, pool)
 		reason = "explore"
 	} else {
@@ -216,6 +228,14 @@ func scheduleAutoCandidates(groupID int, input []autoCandidate, cfg autoSchedule
 
 	markAutoCandidateOffered(s, primary, reason)
 	return autoFailoverOrder(primary, candidates)
+}
+
+// autoCandidateCircuitTripped 只读判断候选所在渠道是否处于熔断状态
+// （Open 冷却中 / HalfOpen）。探索选择时用于排除必然被 relay 层跳过的候选。
+// 只读：ChannelCircuitStatus 不推进熔断状态机（不会 Open → HalfOpen）。
+func autoCandidateCircuitTripped(c autoCandidate) bool {
+	tripped, _, _ := ChannelCircuitStatus(c.item.ChannelID)
+	return tripped
 }
 
 func autoCandidateTier(stats AutoRankStats, minSamples int) int {
