@@ -1176,7 +1176,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                                         <span className="text-muted-foreground tabular-nums font-mono">
                                                                                             {formatDuration(attempt.totalDuration)}
                                                                                         </span>
-                                                                                        <ExportAttemptButton attempt={attempt} log={log} />
+                                                                                        <ExportAttemptButton attempt={attempt} log={displayLog} />
                                                                                         {canDisableAttempt ? (
                                                                                             <AttemptDisableButton
                                                                                                 target={attemptTarget}
@@ -1191,7 +1191,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                                         {sanitizedMsg}
                                                                                     </div>
                                                                                 ) : null}
-                                                                                <AttemptDetailBlock attempt={attempt} log={log} />
+                                                                                <AttemptDetailBlock attempt={attempt} log={displayLog} />
                                                                             </div>
                                                                         );
                                                                     });
