@@ -13,9 +13,9 @@ import (
 // AutoRankTask 自动排序(Auto)控制面任务：
 // 将内存学习窗口周期性落库为 AutoRankSnapshot，供重启恢复。
 //
-// 数据来源为纯被动学习（真实请求），不发起任何主动探测——中转站通常拒绝
-// 无业务意图的极小请求（ping + 1 token）；冷启动/低流量候选由 balancer 的
-// 确定性有界探索在真实流量中按比例获取样本。
+// 数据来源以被动学习（真实请求）为主：冷启动/低流量候选由 balancer 的确定性
+// 有界探索在真实流量中按比例获取样本。用户显式开启主动探测后，AutoRankProbeTask
+// 会额外为欠采样候选补成功率样本（只补成功率，不写延迟、不推进档位）。
 func AutoRankTask() {
 	now := time.Now()
 	defer func() {
@@ -63,6 +63,7 @@ func AutoRankTask() {
 				ChannelID:     item.ChannelID,
 				ModelName:     item.ModelName,
 				Samples:       st.Samples,
+				ProbeSamples:  st.ProbeSamples,
 				Failures:      st.Failures,
 				SuccessRate:   st.SuccessRate,
 				EWMALatencyMS: st.EWMALatencyMS,

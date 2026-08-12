@@ -23,10 +23,11 @@ const AutoRankTimeWindow = 10 * time.Minute
 // 失败降级由外层迭代器（relay.go 的 for iter.Next()）负责，与本模式正交。
 // 总开关 auto_rank_enabled 关闭时回退为原始顺序（不排序、不学习）。
 //
-// 数据来源为纯被动学习（真实请求）：为避免中转站对无业务意图的极小探测请求
-// （如 ping + 1 token）风控，不发起任何主动探测；冷启动/低流量候选通过
-// 确定性有界探索（auto_rank_explore_ratio）在真实请求中按比例被优先尝试，
-// 从而积累样本参与排序。
+// 数据来源以被动学习（真实请求）为主：冷启动/低流量候选通过确定性有界探索
+// （auto_rank_explore_ratio）在真实请求中按比例被优先尝试，从而积累样本参与排序。
+// 主动探测默认关闭——中转站通常对无业务意图的极小请求（ping + 1 token）风控；
+// 用户显式开启（全局 auto_rank_probe_enabled + 渠道 probe_enabled）后，探测样本
+// 只补成功率，不写延迟、不推进排序档位（见 AutoRankStats.RealSamples）。
 type Auto struct {
 	GroupID int
 }
@@ -201,13 +202,17 @@ func clampPct(pct int, def float64) float64 {
 type autoRankSample struct {
 	at      time.Time
 	success bool
-	durMS   int64
-	ttfbMS  int64
+	// probe 标记该样本来自主动探测（max_tokens=1 的极小请求）而非真实转发。
+	// 探测样本只计入成功率窗口，不参与延迟 EWMA、不推进"样本是否充足"判定。
+	probe  bool
+	durMS  int64
+	ttfbMS int64
 }
 
 // autoRankEntry 单个 (groupID, channelID, modelName) 的性能学习窗口。
 // 数据面（relay）在每次候选最终结果点调用 RecordAutoSample；控制面（task）周期
-// 调用 AutoRankStats/AutoRankNeedsProbe 获取统计与探测决策。纯内存、重启清空，
+// 调用 GetAutoRankStatsForGroup 读统计落库，并在开启主动探测时用
+// RecordAutoProbeSampleForGroup 补样本。纯内存、重启清空，
 // 持久化恢复由 AutoRankRestore 从 AutoRankSnapshot 重建近似窗口。
 type autoRankEntry struct {
 	mu       sync.Mutex
@@ -268,13 +273,29 @@ func parseAutoRankGroupKey(key string) (groupID, channelID int, modelName string
 
 // AutoRankStats 候选性能摘要，供排序打分与落库快照使用。
 type AutoRankStats struct {
-	Samples           int
+	Samples int
+	// ProbeSamples Samples 中来自主动探测的条数（Samples 的子集）。
+	ProbeSamples      int
 	Failures          int
 	SuccessRate       float64
 	SuccessConfidence float64
 	EWMALatencyMS     float64
 	EWMATTFBMS        float64
 	LastSeenAt        time.Time
+}
+
+// RealSamples 返回真实转发样本数（窗口样本扣除主动探测）。
+//
+// 所有"样本是否足够"的判定（排序档位 tier、探索池 due）都必须走这里：
+// 探测请求没有有效延迟观测（durMS=0），若让它把候选推进竞技池，该候选会
+// 因为"零延迟"在 effectiveScore 上虚高，抢走本该属于真实快速候选的份额。
+// 而成功率类判定（SuccessRate/SuccessConfidence/渠道聚合）用 Samples 全量，
+// 这正是主动探测的价值所在——没有流量时也能发现候选已经挂了。
+func (s AutoRankStats) RealSamples() int {
+	if n := s.Samples - s.ProbeSamples; n > 0 {
+		return n
+	}
+	return 0
 }
 
 // GetAutoRankStats 读取 (channel, model) 的性能统计（无记录返回零值）。
@@ -305,6 +326,7 @@ func AutoRankHealthForGroup(groupID, channelID int, modelName string) model.LLMA
 	effective := effectiveScoreForGroup(groupID, channelID, st, 0)
 	h := model.LLMAutoRankHealth{
 		Samples:           st.Samples,
+		ProbeSamples:      st.ProbeSamples,
 		Failures:          st.Failures,
 		SuccessRate:       st.SuccessRate,
 		SuccessConfidence: st.SuccessConfidence,
@@ -346,7 +368,7 @@ func (e *autoRankEntry) stats(now time.Time) AutoRankStats {
 
 func (e *autoRankEntry) statsLocked(now time.Time) AutoRankStats {
 	cutoff := now.Add(-AutoRankTimeWindow)
-	var samples, failures int
+	var samples, probeSamples, failures int
 	var ewmaLatency, ewmaTTFB float64
 	latencyInit := false
 	ttfbInit := false
@@ -355,8 +377,15 @@ func (e *autoRankEntry) statsLocked(now time.Time) AutoRankStats {
 		s := e.buf[(e.next-e.size+i+AutoRankPhysicalCap)%AutoRankPhysicalCap]
 		if s.at.After(cutoff) {
 			samples++
+			if s.probe {
+				probeSamples++
+			}
 			if !s.success {
 				failures++
+				continue
+			}
+			// 探测样本耗时不代表真实转发性能（max_tokens=1），不入延迟 EWMA。
+			if s.probe {
 				continue
 			}
 			if s.durMS > 0 {
@@ -379,6 +408,7 @@ func (e *autoRankEntry) statsLocked(now time.Time) AutoRankStats {
 	}
 	st := AutoRankStats{
 		Samples:       samples,
+		ProbeSamples:  probeSamples,
 		Failures:      failures,
 		EWMALatencyMS: ewmaLatency,
 		EWMATTFBMS:    ewmaTTFB,
@@ -433,11 +463,14 @@ func autoRankLatencyMS(st AutoRankStats) float64 {
 //   - 档0 无有效样本：冷启动，排最后；
 //   - 档1 样本不足 minSamples：置信度低，排在有足够样本的候选之后；
 //   - 档2 有足够样本：按得分降序（成功率优先，其次延迟）。
+//
+// 档位一律按真实转发样本（RealSamples）划分，主动探测不能顶替真实样本。
 func autoRankLess(a, b AutoRankStats) bool {
 	minSamples := autoRankMinSamples()
-	aNo, bNo := a.Samples == 0, b.Samples == 0
-	aLow := !aNo && a.Samples < minSamples
-	bLow := !bNo && b.Samples < minSamples
+	aReal, bReal := a.RealSamples(), b.RealSamples()
+	aNo, bNo := aReal == 0, bReal == 0
+	aLow := !aNo && aReal < minSamples
+	bLow := !bNo && bReal < minSamples
 	switch {
 	case aNo:
 		return false
@@ -744,9 +777,10 @@ func effectiveScoreForGroup(groupID, channelID int, st AutoRankStats, medianMS f
 // 档位逻辑同 autoRankLess，档2（样本充足）内比较 effectiveScore。
 func autoRankLessScored(aC int, a AutoRankStats, bC int, b AutoRankStats, medianMS float64) bool {
 	minSamples := autoRankMinSamples()
-	aNo, bNo := a.Samples == 0, b.Samples == 0
-	aLow := !aNo && a.Samples < minSamples
-	bLow := !bNo && b.Samples < minSamples
+	aReal, bReal := a.RealSamples(), b.RealSamples()
+	aNo, bNo := aReal == 0, bReal == 0
+	aLow := !aNo && aReal < minSamples
+	bLow := !bNo && bReal < minSamples
 	switch {
 	case aNo:
 		return false
@@ -761,6 +795,26 @@ func autoRankLessScored(aC int, a AutoRankStats, bC int, b AutoRankStats, median
 	}
 }
 
+// CountableFailure 报告某个 HTTP 状态码对应的失败是否计入 AutoRank 健康窗口。
+// 统计口径对齐 ccLoad：只统计能反映渠道/Key 质量的结果，排除客户端噪音——
+//   - 客户端误用（404/415/422 等非 401/402/403 的 4xx）、客户端取消(499)、408：不计
+//   - 限流(429)：不计（交给熔断 Soft 分支与重试语义，避免个别坏 Key 拉低渠道）
+//   - 配额类(596)：不计（不反映渠道质量）
+//
+// 纳入：连接错误(0)、Key 级认证(401/402/403/405)、渠道级 5xx(500/502/503/504)、
+// Cloudflare(520/521/524)、流式异常(597/598/599)。
+//
+// 数据面（relay 转发）与控制面（主动探测任务）共用此表：探测被站点以 400
+// 拒绝（不接受无业务意图请求）时不该被记为渠道不健康。
+func CountableFailure(statusCode int) bool {
+	switch statusCode {
+	case 0, 401, 402, 403, 405, 500, 502, 503, 504, 520, 521, 524, 597, 598, 599:
+		return true
+	default:
+		return false
+	}
+}
+
 // RecordAutoSample 数据面采集：记录一次候选最终结果。
 // 成功时 durationMS 为转发耗时，用于 EWMA 延迟更新；失败时仅计入窗口失败数。
 func RecordAutoSample(channelID int, modelName string, success bool, durationMS int64) {
@@ -768,12 +822,25 @@ func RecordAutoSample(channelID int, modelName string, success bool, durationMS 
 }
 
 func RecordAutoSampleForGroup(groupID, channelID int, modelName string, success bool, durationMS, ttfbMS int64) {
+	recordAutoSample(groupID, channelID, modelName, success, durationMS, ttfbMS, false)
+}
+
+// RecordAutoProbeSampleForGroup 控制面采集：记录一次主动探测结果。
+//
+// 探测请求是 max_tokens=1 的极小请求，耗时与真实转发不可比，因此不写延迟
+// （durMS/ttfbMS 传 0），只补充成功率窗口——目的是让"没有流量的候选"也能
+// 暴露已经不可用的事实，而不是让它靠"零延迟"爬到排序前面（见 RealSamples）。
+func RecordAutoProbeSampleForGroup(groupID, channelID int, modelName string, success bool) {
+	recordAutoSample(groupID, channelID, modelName, success, 0, 0, true)
+}
+
+func recordAutoSample(groupID, channelID int, modelName string, success bool, durationMS, ttfbMS int64, probe bool) {
 	key := autoRankGroupKey(groupID, channelID, modelName)
 	e := getOrCreateAutoRank(key)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := time.Now()
-	e.buf[e.next] = autoRankSample{at: now, success: success, durMS: durationMS, ttfbMS: ttfbMS}
+	e.buf[e.next] = autoRankSample{at: now, success: success, probe: probe, durMS: durationMS, ttfbMS: ttfbMS}
 	e.next = (e.next + 1) % AutoRankPhysicalCap
 	if e.size < AutoRankPhysicalCap {
 		e.size++
@@ -835,13 +902,19 @@ func AutoRankRestore(snaps []model.AutoRankSnapshot) {
 		if fails > s.Samples {
 			fails = s.Samples
 		}
+		probes := s.ProbeSamples
+		if probes > s.Samples {
+			probes = s.Samples
+		}
 		if size < s.Samples {
 			fails = int(math.Round(float64(fails) * float64(size) / float64(s.Samples)))
+			probes = int(math.Round(float64(probes) * float64(size) / float64(s.Samples)))
 		}
 		for i := 0; i < size; i++ {
 			e.buf[i] = autoRankSample{
 				at:      lastSeen,
 				success: i < size-fails,
+				probe:   i < probes,
 				durMS:   int64(s.EWMALatencyMS),
 				ttfbMS:  int64(s.EWMATTFBMS),
 			}

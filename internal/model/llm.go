@@ -54,6 +54,9 @@ type LLMChannel struct {
 type LLMAutoRankHealth struct {
 	// Samples 时间窗口内采样的请求数。
 	Samples int `json:"samples"`
+	// ProbeSamples Samples 中来自主动探测的条数。探测只补成功率信号，
+	// 不写延迟、不推进"样本充足"判定，因此排序档位看的是 Samples-ProbeSamples。
+	ProbeSamples int `json:"probe_samples"`
 	// Failures 时间窗口内失败请求数。
 	Failures int `json:"failures"`
 	// SuccessRate 窗口成功率（0~1），无样本时为 0。

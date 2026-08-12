@@ -182,7 +182,9 @@ func scheduleAutoCandidates(groupID int, input []autoCandidate, cfg autoSchedule
 
 	due := make([]autoCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.stats.Samples < cfg.MinSamples || candidate.stats.LastSeenAt.IsZero() || now.Sub(candidate.stats.LastSeenAt) >= AutoRankTimeWindow {
+		// 欠采样判据用真实样本：主动探测补的是成功率信号，不能顶替真实流量样本，
+		// 否则被探测过的候选会退出探索池，却又因真实样本不足进不了竞技池而饿死。
+		if candidate.stats.RealSamples() < cfg.MinSamples || candidate.stats.LastSeenAt.IsZero() || now.Sub(candidate.stats.LastSeenAt) >= AutoRankTimeWindow {
 			due = append(due, candidate)
 		}
 	}
@@ -238,11 +240,15 @@ func autoCandidateCircuitTripped(c autoCandidate) bool {
 	return tripped
 }
 
+// autoCandidateTier 按真实转发样本数划分档位。主动探测样本不参与：探测没有
+// 有效延迟观测，让它把候选推进 tier 2 会使该候选在 effectiveScore 上"零延迟"
+// 虚高，抢走真实快速候选的份额（见 AutoRankStats.RealSamples）。
 func autoCandidateTier(stats AutoRankStats, minSamples int) int {
+	real := stats.RealSamples()
 	switch {
-	case stats.Samples >= minSamples:
+	case real >= minSamples:
 		return 2
-	case stats.Samples > 0:
+	case real > 0:
 		return 1
 	default:
 		return 0

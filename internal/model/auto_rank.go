@@ -9,9 +9,10 @@ type AutoRankSnapshot struct {
 	GroupID       int       `json:"group_id" gorm:"not null;index:idx_auto_rank_group_channel_model,unique"`
 	ChannelID     int       `json:"channel_id" gorm:"not null;index:idx_auto_rank_group_channel_model,unique"`
 	ModelName     string    `json:"model_name" gorm:"not null;index:idx_auto_rank_group_channel_model,unique"`
-	Samples       int       `json:"samples" gorm:"not null;default:0"`      // 窗口内有效样本数
-	Failures      int       `json:"failures" gorm:"not null;default:0"`     // 窗口内失败数
-	SuccessRate   float64   `json:"success_rate" gorm:"not null;default:0"` // 成功率（冗余，便于展示）
+	Samples       int       `json:"samples" gorm:"not null;default:0"`       // 窗口内有效样本数
+	ProbeSamples  int       `json:"probe_samples" gorm:"not null;default:0"` // 其中来自主动探测的条数
+	Failures      int       `json:"failures" gorm:"not null;default:0"`      // 窗口内失败数
+	SuccessRate   float64   `json:"success_rate" gorm:"not null;default:0"`  // 成功率（冗余，便于展示）
 	EWMALatencyMS float64   `json:"ewma_latency_ms" gorm:"not null;default:0"`
 	EWMATTFBMS    float64   `json:"ewma_ttfb_ms" gorm:"not null;default:0"`
 	LastSeenAt    time.Time `json:"last_seen_at" gorm:"index"`
