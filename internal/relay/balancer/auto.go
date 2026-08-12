@@ -298,6 +298,18 @@ func (s AutoRankStats) RealSamples() int {
 	return 0
 }
 
+// ProbeOnlyDead 报告候选是否"只有探测样本，且探测全部失败"。
+//
+// 这是主动探测唯一有资格单独下的结论：没有任何真实转发数据，而每一次探测都
+// 失败——此时把真实用户请求送过去只是重复一次已知的失败。调度侧据此把候选从
+// 探索池剔除（软避让，仍留在 failover 链末尾兜底），不做熔断：探测样本量小
+// （默认单轮 10 个、同候选冷却 10 分钟），不足以支撑影响面更大的硬开关。
+//
+// 一旦有任何真实样本，判据立即失效——真实数据永远优先于探测。
+func (s AutoRankStats) ProbeOnlyDead() bool {
+	return s.RealSamples() == 0 && s.ProbeSamples > 0 && s.Failures >= s.ProbeSamples
+}
+
 // GetAutoRankStats 读取 (channel, model) 的性能统计（无记录返回零值）。
 func GetAutoRankStats(channelID int, modelName string) AutoRankStats {
 	return GetAutoRankStatsForGroup(0, channelID, modelName)
@@ -327,6 +339,7 @@ func AutoRankHealthForGroup(groupID, channelID int, modelName string) model.LLMA
 	h := model.LLMAutoRankHealth{
 		Samples:           st.Samples,
 		ProbeSamples:      st.ProbeSamples,
+		ProbeDead:         st.ProbeOnlyDead(),
 		Failures:          st.Failures,
 		SuccessRate:       st.SuccessRate,
 		SuccessConfidence: st.SuccessConfidence,
@@ -368,7 +381,7 @@ func (e *autoRankEntry) stats(now time.Time) AutoRankStats {
 
 func (e *autoRankEntry) statsLocked(now time.Time) AutoRankStats {
 	cutoff := now.Add(-AutoRankTimeWindow)
-	var samples, probeSamples, failures int
+	var samples, probeSamples, failures, probeFailures int
 	var ewmaLatency, ewmaTTFB float64
 	latencyInit := false
 	ttfbInit := false
@@ -382,6 +395,9 @@ func (e *autoRankEntry) statsLocked(now time.Time) AutoRankStats {
 			}
 			if !s.success {
 				failures++
+				if s.probe {
+					probeFailures++
+				}
 				continue
 			}
 			// 探测样本耗时不代表真实转发性能（max_tokens=1），不入延迟 EWMA。
@@ -414,9 +430,20 @@ func (e *autoRankEntry) statsLocked(now time.Time) AutoRankStats {
 		EWMATTFBMS:    ewmaTTFB,
 		LastSeenAt:    e.lastSeen,
 	}
-	if samples > 0 {
-		st.SuccessRate = 1 - float64(failures)/float64(samples)
-		st.SuccessConfidence = wilsonLowerBound(samples-failures, samples)
+	// 成功率优先用真实样本：探测是 max_tokens=1 的极小请求，成功门槛远低于真实
+	// 转发，混进来会把成功率与 Wilson 置信下界一起刷高，让候选靠探测而不是靠真实
+	// 表现挤进竞技池拿份额。真实样本为 0 时才回退探测样本——那正是探测的本职：
+	// 让零流量候选也能暴露故障。渠道聚合另走 Samples/Failures 全量口径，探测失败
+	// 依旧能触发渠道级降级。
+	realSamples := samples - probeSamples
+	switch {
+	case realSamples > 0:
+		realFailures := failures - probeFailures
+		st.SuccessRate = 1 - float64(realFailures)/float64(realSamples)
+		st.SuccessConfidence = wilsonLowerBound(realSamples-realFailures, realSamples)
+	case probeSamples > 0:
+		st.SuccessRate = 1 - float64(probeFailures)/float64(probeSamples)
+		st.SuccessConfidence = wilsonLowerBound(probeSamples-probeFailures, probeSamples)
 	}
 	return st
 }
@@ -713,6 +740,7 @@ func ttfbMinConfidentSample() int {
 
 // groupMedianLatencyMS 计算组内候选的有效 EWMA 延迟中位数（毫秒）。
 // 少于 2 个有效样本（延迟 >0）返回 0，表示不启用相对 TTFB 惩罚。
+// 只认真实转发样本：探测不产生延迟观测，不该参与中位数基准。
 func groupMedianLatencyMS(items []model.GroupItem) float64 {
 	return groupMedianLatencyMSForGroup(0, items)
 }
@@ -721,7 +749,7 @@ func groupMedianLatencyMSForGroup(groupID int, items []model.GroupItem) float64 
 	var vals []float64
 	for _, item := range items {
 		st := GetAutoRankStatsForGroup(groupID, item.ChannelID, item.ModelName)
-		if latency := autoRankLatencyMS(st); latency > 0 && st.Samples > 0 {
+		if latency := autoRankLatencyMS(st); latency > 0 && st.RealSamples() > 0 {
 			vals = append(vals, latency)
 		}
 	}
@@ -738,9 +766,11 @@ func groupMedianLatencyMSForGroup(groupID int, items []model.GroupItem) float64 
 
 // ttfbPenalty 相对延迟惩罚：slow = clamp(latency/median − 1, 0, S_max)，
 // 惩罚 = slow × weight × confidence（样本置信度线性打折）。
+// 置信度按真实转发样本折算：这里衡量的是延迟观测的可信度，而探测不产生延迟观测。
 func ttfbPenalty(st AutoRankStats, medianMS float64) float64 {
 	latencyMS := autoRankLatencyMS(st)
-	if medianMS <= 0 || latencyMS <= 0 || st.Samples <= 0 {
+	realSamples := st.RealSamples()
+	if medianMS <= 0 || latencyMS <= 0 || realSamples <= 0 {
 		return 0
 	}
 	sRatio := latencyMS / medianMS
@@ -753,7 +783,7 @@ func ttfbPenalty(st AutoRankStats, medianMS float64) float64 {
 	}
 	confidence := 1.0
 	if minConf := ttfbMinConfidentSample(); minConf > 0 {
-		confidence = math.Min(1.0, float64(st.Samples)/float64(minConf))
+		confidence = math.Min(1.0, float64(realSamples)/float64(minConf))
 	}
 	return slow * float64(ttfbWeight()) * confidence
 }

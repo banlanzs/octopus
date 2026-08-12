@@ -171,6 +171,12 @@ func collectAutoRankProbeCandidates(ctx context.Context) ([]autoRankProbeCandida
 			if stats.RealSamples() >= minSamples {
 				continue
 			}
+			// 窗口内探测样本已占掉一半物理容量：继续探测只会挤掉真实样本，把
+			// RealSamples 压得更低、又触发更多探测，形成恶性循环。冷却被设得
+			// 远小于窗口时长时这条是唯一的刹车。
+			if stats.ProbeSamples >= balancer.AutoRankPhysicalCap/2 {
+				continue
+			}
 			lastProbeAt := autoRankProbeLastSeen(key)
 			if !lastProbeAt.IsZero() && now.Sub(lastProbeAt) < cooldown {
 				continue

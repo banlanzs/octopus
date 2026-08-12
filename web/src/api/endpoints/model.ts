@@ -74,6 +74,8 @@ export interface AutoRankHealth {
     samples: number;
     /** samples 中来自主动探测的条数：只补成功率，不计延迟、不推进样本充足判定 */
     probe_samples: number;
+    /** 只有探测样本且探测全失败：已从探索池剔除，仅留在 failover 链末尾兜底 */
+    probe_dead: boolean;
     /** 窗口内失败请求数 */
     failures: number;
     /** 窗口成功率 0~1 */

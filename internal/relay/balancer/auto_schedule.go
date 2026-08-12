@@ -199,37 +199,51 @@ func scheduleAutoCandidates(groupID int, input []autoCandidate, cfg autoSchedule
 
 	var primary autoCandidate
 	reason := "quality"
+	// 只在真的要探索时才构造探索池：exploreCandidates 会逐个查渠道熔断状态，
+	// 默认 20% 的探索比例下，每请求都算等于把这份开销放大五倍。
+	var explorePool []autoCandidate
 	if s.exploreCredit >= 1 {
+		explorePool = exploreCandidates(due, candidates)
+	}
+	switch {
+	case len(explorePool) > 0:
 		s.exploreCredit -= 1
-		pool := due
-		if len(pool) == 0 {
-			pool = candidates
-		}
-		// 排除渠道级熔断中的候选：探索机会若落到这类候选上，会被 relay 层的
-		// SkipCircuitBreak 直接跳过（不发请求、不积累样本），白费一次探索。
-		// 池中候选全部熔断时回退原池（保持原行为，冷启动极端场景仍可尝试）。
-		explorable := make([]autoCandidate, 0, len(pool))
-		for _, c := range pool {
-			if !autoCandidateCircuitTripped(c) {
-				explorable = append(explorable, c)
-			}
-		}
-		if len(explorable) > 0 {
-			pool = explorable
-		}
-		primary = leastRecentlyOffered(s, pool)
+		primary = leastRecentlyOffered(s, explorePool)
 		reason = "explore"
-	} else {
-		if len(competitive) == 0 {
-			primary = candidates[0]
-		} else {
-			primary = selectFairAutoCandidate(s, competitive, cfg)
-			reason = "fair"
-		}
+	case len(competitive) == 0:
+		primary = candidates[0]
+	default:
+		primary = selectFairAutoCandidate(s, competitive, cfg)
+		reason = "fair"
 	}
 
 	markAutoCandidateOffered(s, primary, reason)
 	return autoFailoverOrder(primary, candidates)
+}
+
+// exploreCandidates 构造本轮可探索的候选池。
+//
+// 基础池是欠采样候选（due）；所有候选样本都够时退回全体，让探索退化为轮转。
+// 从池中剔除两类"探索必然浪费"的候选：
+//   - 渠道级熔断中：会被 relay 层 SkipCircuitBreak 直接跳过，不发请求也不积累样本；
+//   - 探测已确认不可用（ProbeOnlyDead）：没有真实数据且每次探测都失败，拿真实
+//     用户请求去撞只是重复一次已知的失败。
+//
+// 两类候选都仍留在 failover 链里——排除只影响"主动挑谁当首选"，不影响兜底。
+// 返回空表示本轮没有值得探索的目标，调用方应把探索额度留到下次而不是白扣。
+func exploreCandidates(due, all []autoCandidate) []autoCandidate {
+	pool := due
+	if len(pool) == 0 {
+		pool = all
+	}
+	out := make([]autoCandidate, 0, len(pool))
+	for _, c := range pool {
+		if autoCandidateCircuitTripped(c) || c.stats.ProbeOnlyDead() {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // autoCandidateCircuitTripped 只读判断候选所在渠道是否处于熔断状态

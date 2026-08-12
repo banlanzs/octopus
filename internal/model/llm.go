@@ -57,6 +57,10 @@ type LLMAutoRankHealth struct {
 	// ProbeSamples Samples 中来自主动探测的条数。探测只补成功率信号，
 	// 不写延迟、不推进"样本充足"判定，因此排序档位看的是 Samples-ProbeSamples。
 	ProbeSamples int `json:"probe_samples"`
+	// ProbeDead 只有探测样本且探测全部失败：调度侧已把该候选从探索池剔除，
+	// 不再拿真实用户请求去撞，但它仍留在 failover 链末尾兜底。
+	// 一旦出现任何真实样本即失效。
+	ProbeDead bool `json:"probe_dead"`
 	// Failures 时间窗口内失败请求数。
 	Failures int `json:"failures"`
 	// SuccessRate 窗口成功率（0~1），无样本时为 0。

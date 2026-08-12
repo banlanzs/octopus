@@ -46,6 +46,10 @@ function HealthBadge({ rank }: { rank: AutoRankHealth }) {
     if (tripped) {
         label = formatCooldown(rank.channel_cooldown_sec);
         tone = 'border-destructive/40 bg-destructive/10 text-destructive';
+    } else if (rank.probe_dead) {
+        // 探测确认不可用：优先级高于排名，否则会被 #rank 盖住而看不出已被剔除出探索池
+        label = '✕';
+        tone = 'border-destructive/40 bg-destructive/10 text-destructive';
     } else if (degraded) {
         label = '↓';
         tone = 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400';
@@ -122,6 +126,7 @@ function HealthBadge({ rank }: { rank: AutoRankHealth }) {
                         </>
                     )}
                     {degraded && <span className="text-amber-600 dark:text-amber-400">{t('degradedHint')}</span>}
+                    {rank.probe_dead && <span className="text-destructive">{t('probeDeadHint')}</span>}
                     {tripped && (
                         <span className="text-destructive">
                             {t('tripped')} · {t('cooldown', { time: formatCooldown(rank.channel_cooldown_sec) })} ·{' '}

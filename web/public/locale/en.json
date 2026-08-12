@@ -785,6 +785,7 @@
                 "share": "Target / actual share",
                 "empty": "No samples yet (awaiting deterministic exploration)",
                 "degradedHint": "Channel degraded: multiple models degraded in the window, scores suppressed",
+                "probeDeadHint": "Confirmed unavailable by probing: no real traffic samples and every probe failed. Excluded from exploration, kept only at the tail of the failover chain",
                 "tripped": "Channel tripped",
                 "cooldown": "Cooldown {time} left",
                 "tripCount": "Tripped {count}× total"
