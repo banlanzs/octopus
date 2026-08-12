@@ -741,11 +741,49 @@ func TestAnthropicServerToolBeta(t *testing.T) {
 
 // TestTransformRequestPreservesDisabledThinking verifies the same-protocol
 // (Anthropic→Anthropic) standard transform path rebuilds an explicit
-// thinking.type=disabled block. The Anthropic inbound now surfaces disabled
-// thinking via the DeepSeek ThinkingConfig field (ReasoningEffort is empty for
-// disabled), and the outbound must not drop it — otherwise DeepSeek's Anthropic
-// endpoint silently reverts to enabled thinking.
+// thinking.type=disabled block for non-DeepSeek upstreams. The Anthropic
+// inbound surfaces disabled thinking via the DeepSeek ThinkingConfig field
+// (ReasoningEffort is empty for disabled), and the outbound must not drop it.
 func TestTransformRequestPreservesDisabledThinking(t *testing.T) {
+	outbound := &MessageOutbound{}
+	maxTokens := int64(16)
+	req := &model.InternalLLMRequest{
+		Model:     "claude-sonnet-4-5",
+		MaxTokens: &maxTokens,
+		Thinking:  &model.ThinkingConfig{Type: "disabled"},
+		Messages: []model.Message{
+			{Role: "user", Content: model.MessageContent{Content: stringPtr("hello")}},
+		},
+	}
+
+	httpReq, err := outbound.TransformRequest(context.Background(), req, "https://api.anthropic.com/v1", "sk-test")
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(req.Body) error = %v", err)
+	}
+
+	var payload anthropicModel.MessageRequest
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request: %v\n%s", err, body)
+	}
+	if payload.Thinking == nil {
+		t.Fatalf("thinking block was dropped by Anthropic→Anthropic transform: %s", body)
+	}
+	if payload.Thinking.Type != anthropicModel.ThinkingTypeDisabled {
+		t.Fatalf("expected thinking.type=disabled, got %q", payload.Thinking.Type)
+	}
+}
+
+// TestTransformRequestDropsDisabledThinkingForDeepSeek verifies that the standard
+// transform path does NOT emit thinking.type=disabled for DeepSeek targets:
+// DeepSeek's Anthropic-compatible endpoint rejects it with a 400
+// ("'reasoning_effort' must be one of ...", regardless of reasoning_effort),
+// so the transform drops the block and lets the endpoint use its default
+// thinking mode instead.
+func TestTransformRequestDropsDisabledThinkingForDeepSeek(t *testing.T) {
 	outbound := &MessageOutbound{}
 	maxTokens := int64(16)
 	req := &model.InternalLLMRequest{
@@ -770,11 +808,8 @@ func TestTransformRequestPreservesDisabledThinking(t *testing.T) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("unmarshal request: %v\n%s", err, body)
 	}
-	if payload.Thinking == nil {
-		t.Fatalf("thinking block was dropped by Anthropic→Anthropic transform: %s", body)
-	}
-	if payload.Thinking.Type != anthropicModel.ThinkingTypeDisabled {
-		t.Fatalf("expected thinking.type=disabled, got %q", payload.Thinking.Type)
+	if payload.Thinking != nil {
+		t.Fatalf("thinking.type=disabled must be dropped for DeepSeek target, got: %s", body)
 	}
 }
 

@@ -115,6 +115,15 @@ func (o *MessageOutbound) TransformRequestRaw(ctx context.Context, rawBody []byt
 			return nil, err
 		}
 		rawBody = normalizedBody
+
+		// DeepSeek Anthropic 端点不接受 thinking.type=disabled（实测 400
+		// "reasoning_effort must be one of ..."，与 reasoning_effort 无关）。
+		// 剥离 disabled 配置，端点按默认思考模式处理；enabled 等原样保留。
+		strippedBody, _, err := stripDisabledThinkingForDeepSeek(rawBody)
+		if err != nil {
+			return nil, err
+		}
+		rawBody = strippedBody
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "", bytes.NewReader(rawBody))
@@ -280,6 +289,148 @@ func findTopLevelStringField(raw []byte, field string) (int, int, bool) {
 				}
 			}
 		default:
+			if depth == 1 {
+				expectKey = true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// stripDisabledThinkingForDeepSeek 剥离顶层 thinking.type=disabled 配置。
+// DeepSeek Anthropic 兼容端点不接受 thinking.type=disabled——实测返回
+// "'reasoning_effort' must be one of: ..." 400，且该错误与请求是否携带
+// reasoning_effort 无关（携带白名单内的 low 同样 400）。剥离后端点按默认
+// 思考模式处理；enabled/adaptive 等配置原样保留。
+func stripDisabledThinkingForDeepSeek(rawBody []byte) ([]byte, bool, error) {
+	keyStart, valueEnd, found := findTopLevelFieldRange(rawBody, "thinking")
+	if !found {
+		return rawBody, false, nil
+	}
+	// value 必须是对象才关心；非对象（损坏/异常）不动。
+	// keyStart..valueEnd 含 "thinking": 前缀，需从 value 对象起点解析。
+	valueObjStart := bytes.IndexByte(rawBody[keyStart:valueEnd], '{')
+	if valueObjStart < 0 {
+		return rawBody, false, nil
+	}
+	var th struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(rawBody[keyStart+valueObjStart:valueEnd], &th); err != nil {
+		return rawBody, false, nil
+	}
+	if th.Type != "disabled" {
+		return rawBody, false, nil
+	}
+
+	// 删除 "thinking":{...} 及其一侧逗号，保持 JSON 合法：
+	// - 字段前有逗号（中间/末尾字段）：从逗号删到 valueEnd
+	// - 字段是首个字段：删 keyStart..valueEnd，再删后续逗号
+	commaBefore := -1
+	for i := keyStart - 1; i >= 0; i-- {
+		switch rawBody[i] {
+		case ',':
+			commaBefore = i
+			i = 0
+		case ' ', '\t', '\r', '\n':
+		default:
+			i = 0
+		}
+	}
+
+	var newBody []byte
+	if commaBefore >= 0 {
+		newBody = make([]byte, 0, len(rawBody)-(valueEnd-commaBefore))
+		newBody = append(newBody, rawBody[:commaBefore]...)
+		newBody = append(newBody, rawBody[valueEnd:]...)
+		return newBody, true, nil
+	}
+
+	commaAfter := -1
+	for i := valueEnd; i < len(rawBody); i++ {
+		switch rawBody[i] {
+		case ',':
+			commaAfter = i
+			i = len(rawBody)
+		case ' ', '\t', '\r', '\n':
+		default:
+			i = len(rawBody)
+		}
+	}
+	if commaAfter >= 0 {
+		newBody = make([]byte, 0, len(rawBody)-(commaAfter-keyStart)+1)
+		newBody = append(newBody, rawBody[:keyStart]...)
+		newBody = append(newBody, rawBody[commaAfter+1:]...)
+	} else {
+		newBody = make([]byte, 0, len(rawBody)-(valueEnd-keyStart))
+		newBody = append(newBody, rawBody[:keyStart]...)
+		newBody = append(newBody, rawBody[valueEnd:]...)
+	}
+	return newBody, true, nil
+}
+
+// findTopLevelFieldRange 定位顶层对象中指定字段的 key 起始与 value 结束字节范围。
+// 仅匹配深度为 1 的 key；value 为对象/数组时 valueEnd 指向闭合 token 之后。
+func findTopLevelFieldRange(raw []byte, field string) (keyStart, valueEnd int, found bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+
+	tok, err := dec.Token()
+	if err != nil {
+		return 0, 0, false
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return 0, 0, false
+	}
+
+	depth := 1
+	expectKey := true
+	var currentKey string
+	keyStart = -1
+
+	for dec.More() || depth > 0 {
+		tok, err = dec.Token()
+		if err != nil {
+			return 0, 0, false
+		}
+
+		switch v := tok.(type) {
+		case json.Delim:
+			switch v {
+			case '{', '[':
+				depth++
+				expectKey = false
+			case '}', ']':
+				depth--
+				if depth == 0 {
+					return 0, 0, false
+				}
+				// 闭合顶层字段的 value（对象/数组）：当前位置即 valueEnd
+				if keyStart >= 0 && currentKey == field {
+					return keyStart, int(dec.InputOffset()), true
+				}
+				// 数组 '[' 后 ']' 退出时恢复 expectKey（与 findTopLevelStringField 同修复）
+				expectKey = depth == 1
+			}
+		case string:
+			if depth == 1 && expectKey {
+				currentKey = v
+				expectKey = false
+				if v == field {
+					keyStart = findPrecedingStringStart(raw, int(dec.InputOffset())-1)
+				}
+			} else if depth == 1 && keyStart >= 0 && currentKey == field {
+				// 标量 value（字符串）
+				return keyStart, int(dec.InputOffset()), true
+			} else if depth == 1 {
+				// 非目标字段的字符串标量 value：恢复 expectKey，等待下一个 key
+				expectKey = true
+			}
+		default:
+			if depth == 1 && keyStart >= 0 && currentKey == field {
+				// 非字符串标量（数字/true/null）
+				return keyStart, int(dec.InputOffset()), true
+			}
 			if depth == 1 {
 				expectKey = true
 			}
@@ -847,7 +998,14 @@ func convertToAnthropicRequest(req *model.InternalLLMRequest) *anthropicModel.Me
 		// above; this branch primarily preserves explicit "disabled".
 		switch req.Thinking.Type {
 		case "disabled":
-			result.Thinking = &anthropicModel.Thinking{Type: anthropicModel.ThinkingTypeDisabled}
+			// DeepSeek Anthropic 端点不接受 thinking.type=disabled（实测 400
+			// "reasoning_effort must be one of ..."），剥离配置让端点按默认
+			// 思考模式处理；Anthropic 官方端点保留 disabled 语义。
+			if isDeepSeekTarget(req) {
+				result.Thinking = nil
+			} else {
+				result.Thinking = &anthropicModel.Thinking{Type: anthropicModel.ThinkingTypeDisabled}
+			}
 		case "enabled":
 			result.Thinking = &anthropicModel.Thinking{
 				Type:         anthropicModel.ThinkingTypeEnabled,
