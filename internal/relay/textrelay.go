@@ -164,15 +164,15 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 
 			// 流式：上游 SSE → 统一流 → 客户端格式流 → SSE 写回。
 			if llmReq.Stream != nil && *llmReq.Stream {
-				usage, ferr := forwardAxonStream(ctx, httpClient, outAdapter, inAdapter, outReq, c)
+				usage, ferr := forwardAxonStream(ctx, httpClient, outAdapter, inAdapter, outReq, c, time.Duration(group.FirstTokenTimeOut)*time.Second, streamHeartbeatInterval())
 				if ferr != nil {
 					sc := axonErrorStatusCode(ferr)
 					span.End(dbmodel.AttemptFailed, sc, ferr.Error())
 					recordAxonAttemptFailure(channel, usedKey, span, sc)
 					lastStatusCode = sc
 					lastAttemptErr = ferr
-					if !isRetryableStatus(sc) {
-						break
+					if errors.Is(ferr, errAxonFirstTokenTimeout) || !isRetryableStatus(sc) {
+						break // 首 token 超时切换通道，不重试同一通道
 					}
 					continue
 				}
@@ -357,9 +357,12 @@ func writeAxonResponse(c *gin.Context, out *httpclient.Response) {
 	c.Data(statusCode, contentType, out.Body)
 }
 
+// errAxonFirstTokenTimeout 标记首 token 超时，供 TextHandler 识别并切换通道（而非同通道重试）。
+var errAxonFirstTokenTimeout = errors.New("first token timeout")
+
 // forwardAxonStream 处理流式转发：上游 SSE → 统一流 → 客户端格式流 → SSE 写回，
 // 返回聚合后的 usage（聚合失败时返回 nil，不阻断转发）。
-func forwardAxonStream(ctx context.Context, httpClient *httpclient.HttpClient, outAdapter transformer.Outbound, inAdapter transformer.Inbound, outReq *httpclient.Request, c *gin.Context) (*llm.Usage, error) {
+func forwardAxonStream(ctx context.Context, httpClient *httpclient.HttpClient, outAdapter transformer.Outbound, inAdapter transformer.Inbound, outReq *httpclient.Request, c *gin.Context, firstTokenTimeout, heartbeatInterval time.Duration) (*llm.Usage, error) {
 	upstreamStream, err := httpClient.DoStream(ctx, outReq)
 	if err != nil {
 		return nil, err
@@ -374,11 +377,15 @@ func forwardAxonStream(ctx context.Context, httpClient *httpclient.HttpClient, o
 		_ = llmStream.Close()
 		return nil, err
 	}
-	return writeAxonStream(c, clientStream, inAdapter)
+	return writeAxonStream(c, clientStream, inAdapter, firstTokenTimeout, heartbeatInterval)
 }
 
-// writeAxonStream 消费客户端格式流并逐事件写回 SSE，结束后聚合 usage。
-func writeAxonStream(c *gin.Context, clientStream streams.Stream[*httpclient.StreamEvent], inAdapter transformer.Inbound) (*llm.Usage, error) {
+// writeAxonStream 消费客户端格式流并逐事件写回 SSE。并发支持：
+//   - 首 token 超时（firstTokenTimeout > 0）：第一个事件到达前超时则中断流，返回 errAxonFirstTokenTimeout；
+//   - 心跳（heartbeatInterval > 0）：无事件时定期写 SSE 注释字节（":\n\n"）保活。
+//
+// 流正常结束后用 AggregateStreamChunks 聚合 usage。
+func writeAxonStream(c *gin.Context, clientStream streams.Stream[*httpclient.StreamEvent], inAdapter transformer.Inbound, firstTokenTimeout, heartbeatInterval time.Duration) (*llm.Usage, error) {
 	if clientStream == nil {
 		return nil, fmt.Errorf("empty stream")
 	}
@@ -390,28 +397,90 @@ func writeAxonStream(c *gin.Context, clientStream streams.Stream[*httpclient.Str
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
 
-	events := make([]*httpclient.StreamEvent, 0, 8)
-	for clientStream.Next() {
-		event := clientStream.Current()
-		if event == nil || len(event.Data) == 0 {
-			continue
-		}
-		events = append(events, event)
-		writeAxonSSEEvent(c, event)
-		c.Writer.Flush()
+	type streamResult struct {
+		event *httpclient.StreamEvent
+		err   error
 	}
-	if err := clientStream.Err(); err != nil {
-		return nil, err
+	results := make(chan streamResult, 1)
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		defer close(results)
+		for clientStream.Next() {
+			ev := clientStream.Current()
+			select {
+			case results <- streamResult{event: ev}:
+			case <-done:
+				return
+			}
+		}
+		if err := clientStream.Err(); err != nil {
+			select {
+			case results <- streamResult{err: err}:
+			case <-done:
+			}
+		}
+	}()
+
+	var firstTokenTimer *time.Timer
+	var firstTokenC <-chan time.Time
+	if firstTokenTimeout > 0 {
+		firstTokenTimer = time.NewTimer(firstTokenTimeout)
+		firstTokenC = firstTokenTimer.C
+		defer firstTokenTimer.Stop()
 	}
 
-	// 聚合流式 chunk 得到 usage（非关键路径，失败仅降级为无 usage）。
-	if len(events) > 0 && inAdapter != nil {
-		_, meta, err := inAdapter.AggregateStreamChunks(context.Background(), events)
-		if err == nil {
-			return meta.Usage, nil
+	var heartbeatTicker *time.Ticker
+	var heartbeatC <-chan time.Time
+	if heartbeatInterval > 0 {
+		heartbeatTicker = time.NewTicker(heartbeatInterval)
+		heartbeatC = heartbeatTicker.C
+		defer heartbeatTicker.Stop()
+	}
+
+	events := make([]*httpclient.StreamEvent, 0, 8)
+	firstToken := true
+
+	for {
+		select {
+		case <-firstTokenC:
+			return nil, fmt.Errorf("%w (%s)", errAxonFirstTokenTimeout, firstTokenTimeout)
+		case <-heartbeatC:
+			if _, err := c.Writer.Write([]byte(":\n\n")); err != nil {
+				return nil, err
+			}
+			c.Writer.Flush()
+		case <-c.Request.Context().Done():
+			return nil, c.Request.Context().Err()
+		case r, ok := <-results:
+			if !ok {
+				if len(events) > 0 && inAdapter != nil {
+					_, meta, err := inAdapter.AggregateStreamChunks(context.Background(), events)
+					if err == nil {
+						return meta.Usage, nil
+					}
+				}
+				return nil, nil
+			}
+			if r.err != nil {
+				return nil, r.err
+			}
+			event := r.event
+			if event == nil || len(event.Data) == 0 {
+				continue
+			}
+			events = append(events, event)
+			if firstToken {
+				firstToken = false
+				if firstTokenTimer != nil {
+					firstTokenTimer.Stop()
+				}
+			}
+			writeAxonSSEEvent(c, event)
+			c.Writer.Flush()
 		}
 	}
-	return nil, nil
 }
 
 // writeAxonSSEEvent 写单个 SSE 事件。

@@ -3,13 +3,16 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	dbpkg "github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
@@ -17,6 +20,8 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
+	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/looplj/axonhub/llm/streams"
 )
 
 // setupTextRelayTest 建立独立 SQLite 测试库，并创建指向 mock 上游的渠道与分组。
@@ -214,6 +219,41 @@ func TestTextHandlerSameChannelRetry(t *testing.T) {
 		t.Fatalf("upstream attempts = %d, want 2", got)
 	}
 }
+
+func TestWriteAxonStreamFirstTokenTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	stream := &blockingStream{closed: make(chan struct{})}
+	_, err := writeAxonStream(c, stream, nil, 100*time.Millisecond, 0)
+	if !errors.Is(err, errAxonFirstTokenTimeout) {
+		t.Fatalf("err = %v, want errAxonFirstTokenTimeout", err)
+	}
+}
+
+// blockingStream 是一个永不产出事件、仅在 Close 后返回的流，用于模拟首 token 迟迟未达。
+type blockingStream struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (s *blockingStream) Next() bool {
+	<-s.closed
+	return false
+}
+
+func (s *blockingStream) Current() *httpclient.StreamEvent { return nil }
+
+func (s *blockingStream) Err() error { return nil }
+
+func (s *blockingStream) Close() error {
+	s.once.Do(func() { close(s.closed) })
+	return nil
+}
+
+var _ streams.Stream[*httpclient.StreamEvent] = (*blockingStream)(nil)
 
 func TestTextHandlerOpenAIChatStream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
