@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	dbpkg "github.com/bestruirui/octopus/internal/db"
@@ -21,6 +22,10 @@ import (
 // setupTextRelayTest 建立独立 SQLite 测试库，并创建指向 mock 上游的渠道与分组。
 // group.Name 即模型名（octopus 按模型名路由分组）。
 func setupTextRelayTest(t *testing.T, channelType outbound.OutboundType, modelName, upstreamURL string) {
+	setupTextRelayTestGroup(t, channelType, modelName, upstreamURL, false, 0)
+}
+
+func setupTextRelayTestGroup(t *testing.T, channelType outbound.OutboundType, modelName, upstreamURL string, retryEnabled bool, maxRetries int) {
 	t.Helper()
 	if dbpkg.GetDB() != nil {
 		_ = dbpkg.Close()
@@ -45,9 +50,11 @@ func setupTextRelayTest(t *testing.T, channelType outbound.OutboundType, modelNa
 	}
 
 	group := &model.Group{
-		Name:  modelName,
-		Mode:  model.GroupModeRoundRobin,
-		Items: []model.GroupItem{{ChannelID: channel.ID, ModelName: modelName, Weight: 1}},
+		Name:         modelName,
+		Mode:         model.GroupModeRoundRobin,
+		RetryEnabled: retryEnabled,
+		MaxRetries:   maxRetries,
+		Items:        []model.GroupItem{{ChannelID: channel.ID, ModelName: modelName, Weight: 1}},
 	}
 	if err := op.GroupCreate(group, ctx); err != nil {
 		t.Fatalf("GroupCreate failed: %v", err)
@@ -177,6 +184,34 @@ func TestTextHandlerRecordsRelayLog(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("relay log for gpt-4o-metrics not found")
+	}
+}
+
+func TestTextHandlerSameChannelRetry(t *testing.T) {
+	var attempts atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"temporary"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-retry","object":"chat.completion","model":"gpt-4o-retry","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTestGroup(t, outbound.OutboundTypeOpenAIChat, "gpt-4o-retry", upstream.URL, true, 2)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"gpt-4o-retry","messages":[{"role":"user","content":"hi"}]}`)
+
+	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 after retry (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("upstream attempts = %d, want 2", got)
 	}
 }
 
