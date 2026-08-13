@@ -26,14 +26,14 @@ import (
 	"github.com/looplj/axonhub/llm/transformer"
 )
 
-// TextHandler 是文本 API 转换迁移的转发入口（阶段 3）：
+// TextHandler 是文本 API 转换迁移的转发入口：
 // 使用 axonhub 的 inbound/outbound transformer 完成协议转换，复用本地
 // 迭代器（选通道）与渠道 HTTP client（代理/超时），支持非流式与流式 SSE，
-// 并接入 RelayMetrics（审计日志 + 用量统计）。
+// 并接入 RelayMetrics（审计日志 + 用量统计）、渠道健康闭环、重试、首 token
+// 超时、SSE 心跳、同格式直通与 volcengine 补偿。
 //
-// 阶段 3 范围约束：支持 openai chat/completions 与 anthropic messages 的
-// 非流式 + 流式转发；直通、WebSocket、replay、quality、route-learning 的
-// 双 IR 适配留待后续。该函数暂未接入生产路由，由 round-trip 测试验证。
+// 已接入生产路由（chat/completions、messages、responses、embeddings）；
+// responses/compact、WS、图片路由仍保留自研。
 func TextHandler(format llm.APIFormat, c *gin.Context) {
 	inAdapter := axonadapter.NewInbound(format)
 	if inAdapter == nil {

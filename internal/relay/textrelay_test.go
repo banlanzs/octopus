@@ -309,6 +309,62 @@ func (s *blockingStream) Close() error {
 
 var _ streams.Stream[*httpclient.StreamEvent] = (*blockingStream)(nil)
 
+func TestTextHandlerAnthropicPassthroughParamOverride(t *testing.T) {
+	var receivedBody atomic.Value
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		receivedBody.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`))
+	}))
+	defer upstream.Close()
+
+	if dbpkg.GetDB() != nil {
+		_ = dbpkg.Close()
+	}
+	if err := dbpkg.InitDB("sqlite", filepath.Join(t.TempDir(), "pt-po.db"), false); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(func() { _ = dbpkg.Close() })
+	ctx := context.Background()
+	po := `{"max_tokens":50}`
+	ch := &model.Channel{
+		Name:          "pt-po-channel",
+		Type:          outbound.OutboundTypeAnthropic,
+		Enabled:       true,
+		BaseUrls:      []model.BaseUrl{{URL: upstream.URL}},
+		Model:         "claude-3-5-sonnet",
+		Keys:          []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+		ParamOverride: &po,
+	}
+	if err := op.ChannelCreate(ch, ctx); err != nil {
+		t.Fatalf("ChannelCreate: %v", err)
+	}
+	if err := op.GroupCreate(&model.Group{
+		Name:  "claude-3-5-sonnet",
+		Mode:  model.GroupModeRoundRobin,
+		Items: []model.GroupItem{{ChannelID: ch.ID, ModelName: "claude-3-5-sonnet", Weight: 1}},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate: %v", err)
+	}
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/messages",
+		`{"model":"claude-3-5-sonnet","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`)
+	TextHandler(llm.APIFormatAnthropicMessage, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	got, _ := receivedBody.Load().(string)
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatalf("unmarshal upstream body: %v", err)
+	}
+	if mt, _ := m["max_tokens"].(float64); mt != 50 {
+		t.Fatalf("upstream max_tokens = %v, want 50 (param override not applied)", m["max_tokens"])
+	}
+}
+
 func TestApplyVolcengineCompensation(t *testing.T) {
 	outReq := &httpclient.Request{
 		Body: []byte(`{"model":"doubao-seed-1-6-251015","input":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"metadata":{"k":"v"},"reasoning":{"effort":"medium"}}`),

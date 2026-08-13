@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -76,6 +77,19 @@ func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel
 	body, err := rewriteRawRequestModel(rawBody, modelName)
 	if err != nil {
 		return 0, nil, err
+	}
+	// 渠道参数覆盖（对齐本地 forwardViaHTTPPassthrough；显式配置覆盖时接受字节重排）。
+	if channel.ParamOverride != nil && strings.TrimSpace(*channel.ParamOverride) != "" {
+		var bodyMap map[string]any
+		if json.Unmarshal(body, &bodyMap) == nil {
+			var override map[string]any
+			if json.Unmarshal([]byte(*channel.ParamOverride), &override) == nil {
+				maps.Copy(bodyMap, override)
+				if modified, err := json.Marshal(bodyMap); err == nil {
+					body = modified
+				}
+			}
+		}
 	}
 
 	baseURL := strings.TrimSuffix(channel.GetBaseUrl(), "/") + "/messages"

@@ -173,6 +173,8 @@ func (m *RelayMetrics) SetAxonResponse(resp *llm.Response, actualModel string, c
 		cacheRead = usage.PromptTokensDetails.CachedTokens
 		cacheWrite = usage.PromptTokensDetails.WriteCachedTokens
 	}
+	// axonhub 的 PromptTokens 为「包含缓存」语义（总输入 = 纯输入 + cache_read + cache_creation），
+	// 故非缓存输入 = PromptTokens - CachedTokens - WriteCachedTokens；负值兑底回 PromptTokens。
 	nonCached := usage.PromptTokens - cacheRead - cacheWrite
 	if nonCached < 0 {
 		nonCached = usage.PromptTokens
