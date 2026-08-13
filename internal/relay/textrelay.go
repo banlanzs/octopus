@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -13,14 +14,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/looplj/axonhub/llm/streams"
+	"github.com/looplj/axonhub/llm/transformer"
 )
 
-// TextHandler 是文本 API 转换迁移阶段 1 的非流式转发入口：
+// TextHandler 是文本 API 转换迁移的转发入口（阶段 2）：
 // 使用 axonhub 的 inbound/outbound transformer 完成协议转换，复用本地
-// 迭代器（选通道）与渠道 HTTP client（代理/超时）。
+// 迭代器（选通道）与渠道 HTTP client（代理/超时），支持非流式与流式 SSE。
 //
-// 阶段 1 范围约束：仅支持非流式（stream=false）的 openai chat/completions
-// 与 anthropic messages；直通、WebSocket、流式、跨协议补偿留待后续阶段。
+// 阶段 2 范围约束：支持 openai chat/completions 与 anthropic messages 的
+// 非流式 + 流式转发；直通、WebSocket、跨协议补偿留待后续阶段。
 // 该函数暂未接入生产路由，由 round-trip 测试验证转换闭环。
 func TextHandler(format llm.APIFormat, c *gin.Context) {
 	inAdapter := axonadapter.NewInbound(format)
@@ -44,12 +47,6 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	}
 	if llmReq == nil {
 		resp.Error(c, http.StatusInternalServerError, "empty transformed request")
-		return
-	}
-
-	// 阶段 1 仅支持非流式。
-	if llmReq.Stream != nil && *llmReq.Stream {
-		resp.Error(c, http.StatusBadRequest, "streaming is not supported by text relay (phase 1)")
 		return
 	}
 
@@ -114,7 +111,18 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 			lastErr = err
 			continue
 		}
-		httpResp, err := httpclient.NewHttpClientWithClient(nativeClient).Do(ctx, outReq)
+		httpClient := httpclient.NewHttpClientWithClient(nativeClient)
+
+		// 流式：上游 SSE → 统一流 → 客户端格式流 → SSE 写回。
+		if llmReq.Stream != nil && *llmReq.Stream {
+			if err := forwardAxonStream(ctx, httpClient, outAdapter, inAdapter, outReq, c); err != nil {
+				lastErr = err
+				continue
+			}
+			return
+		}
+
+		httpResp, err := httpClient.Do(ctx, outReq)
 		if err != nil {
 			lastErr = err
 			continue
@@ -162,4 +170,55 @@ func writeAxonResponse(c *gin.Context, out *httpclient.Response) {
 		statusCode = http.StatusOK
 	}
 	c.Data(statusCode, contentType, out.Body)
+}
+
+// forwardAxonStream 处理流式转发：上游 SSE → 统一流 → 客户端格式流 → SSE 写回。
+func forwardAxonStream(ctx context.Context, httpClient *httpclient.HttpClient, outAdapter transformer.Outbound, inAdapter transformer.Inbound, outReq *httpclient.Request, c *gin.Context) error {
+	upstreamStream, err := httpClient.DoStream(ctx, outReq)
+	if err != nil {
+		return err
+	}
+	llmStream, err := outAdapter.TransformStream(ctx, outReq, upstreamStream)
+	if err != nil {
+		_ = upstreamStream.Close()
+		return err
+	}
+	clientStream, err := inAdapter.TransformStream(ctx, llmStream)
+	if err != nil {
+		_ = llmStream.Close()
+		return err
+	}
+	return writeAxonStream(c, clientStream)
+}
+
+// writeAxonStream 消费客户端格式流并逐事件写回 SSE。
+func writeAxonStream(c *gin.Context, clientStream streams.Stream[*httpclient.StreamEvent]) error {
+	if clientStream == nil {
+		return fmt.Errorf("empty stream")
+	}
+	defer clientStream.Close()
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	for clientStream.Next() {
+		event := clientStream.Current()
+		if event == nil || len(event.Data) == 0 {
+			continue
+		}
+		writeAxonSSEEvent(c, event)
+		c.Writer.Flush()
+	}
+	return clientStream.Err()
+}
+
+// writeAxonSSEEvent 写单个 SSE 事件。
+func writeAxonSSEEvent(c *gin.Context, event *httpclient.StreamEvent) {
+	if event.Type != "" {
+		_, _ = fmt.Fprintf(c.Writer, "event: %s\n", event.Type)
+	}
+	_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", event.Data)
 }

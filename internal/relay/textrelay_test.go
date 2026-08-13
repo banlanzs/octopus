@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -139,9 +140,25 @@ func TestTextHandlerAnthropicMessagesRoundTrip(t *testing.T) {
 	}
 }
 
-func TestTextHandlerRejectsStreaming(t *testing.T) {
+func TestTextHandlerOpenAIChatStream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError) // 不应被触达
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		chunks := []string{
+			`{"id":"c1","object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`{"id":"c1","object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}`,
+			`{"id":"c1","object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		}
+		for _, chunk := range chunks {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
 	}))
 	defer upstream.Close()
 
@@ -152,7 +169,49 @@ func TestTextHandlerRejectsStreaming(t *testing.T) {
 
 	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
 
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for streaming (body=%s)", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "hello") || !strings.Contains(body, "world") {
+		t.Fatalf("stream body missing content: %q", body)
+	}
+}
+
+func TestTextHandlerAnthropicMessagesStream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		events := []struct {
+			name string
+			data string
+		}{
+			{"message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet","content":[]}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`},
+			{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`},
+			{"message_stop", `{"type":"message_stop"}`},
+		}
+		for _, ev := range events {
+			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.name, ev.data)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeAnthropic, "claude-3-5-sonnet", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/messages",
+		`{"model":"claude-3-5-sonnet","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+
+	TextHandler(llm.APIFormatAnthropicMessage, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "hello") || !strings.Contains(body, "message_stop") {
+		t.Fatalf("stream body missing content: %q", body)
 	}
 }
