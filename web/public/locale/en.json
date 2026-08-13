@@ -781,6 +781,7 @@
                 "samples": "Samples",
                 "failures": "Failures",
                 "probeSamples": "probes",
+                "trail": "Recent samples (✓ ok · ✗ fail · p probe)",
                 "rank": "Dynamic rank",
                 "share": "Target / actual share",
                 "empty": "No samples yet (awaiting deterministic exploration)",

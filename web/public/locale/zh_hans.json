@@ -781,6 +781,7 @@
                 "samples": "采样",
                 "failures": "失败",
                 "probeSamples": "其中探测",
+                "trail": "样本时间线（✓ 成功 · ✗ 失败 · p 探测）",
                 "rank": "动态排名",
                 "share": "目标 / 实际占比",
                 "empty": "暂无采样（等待确定性探索）",

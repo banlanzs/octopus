@@ -109,6 +109,8 @@ export interface AutoRankHealth {
     channel_cooldown_sec: number;
     /** 渠道级累计熔断次数 */
     channel_trip_count: number;
+    /** 窗口样本时间线摘要（✓ 成功 / ✗ 失败 / p 探测，从旧到新）；无样本时缺省 */
+    trail_summary?: string;
 }
 
 /**
