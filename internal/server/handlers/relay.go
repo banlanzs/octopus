@@ -6,8 +6,8 @@ import (
 	"github.com/bestruirui/octopus/internal/relay"
 	"github.com/bestruirui/octopus/internal/server/middleware"
 	"github.com/bestruirui/octopus/internal/server/router"
-	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	"github.com/gin-gonic/gin"
+	"github.com/looplj/axonhub/llm"
 )
 
 func init() {
@@ -45,19 +45,19 @@ func init() {
 }
 
 func chat(c *gin.Context) {
-	relay.Handler(inbound.InboundTypeOpenAIChat, c)
+	relay.TextHandler(llm.APIFormatOpenAIChatCompletion, c)
 }
 func response(c *gin.Context) {
-	relay.Handler(inbound.InboundTypeOpenAIResponse, c)
+	relay.TextHandler(llm.APIFormatOpenAIResponse, c)
 }
 func responseCompact(c *gin.Context) {
 	relay.HandleResponsesCompact(c)
 }
 func message(c *gin.Context) {
-	relay.Handler(inbound.InboundTypeAnthropic, c)
+	relay.TextHandler(llm.APIFormatAnthropicMessage, c)
 }
 func embedding(c *gin.Context) {
-	relay.Handler(inbound.InboundTypeOpenAIEmbedding, c)
+	relay.TextHandler(llm.APIFormatOpenAIEmbedding, c)
 }
 func wsResponse(c *gin.Context) {
 	relay.HandleWSResponse(c)

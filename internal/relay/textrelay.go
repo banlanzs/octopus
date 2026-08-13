@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -56,6 +57,14 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	if llmReq == nil {
 		resp.Error(c, http.StatusInternalServerError, "empty transformed request")
 		return
+	}
+
+	// APIKey 模型白名单校验（与旧 relay 一致）。
+	if supportedModels := c.GetString("supported_models"); supportedModels != "" {
+		if !slices.Contains(strings.Split(supportedModels, ","), llmReq.Model) {
+			resp.Error(c, http.StatusBadRequest, "model not supported")
+			return
+		}
 	}
 
 	requestType := llmReq.RequestType

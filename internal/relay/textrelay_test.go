@@ -357,6 +357,58 @@ func TestApplyVolcengineCompensationNonWhitelistModel(t *testing.T) {
 	}
 }
 
+func TestTextHandlerOpenAIResponsesRoundTrip(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_test","object":"response","model":"gpt-4o","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14}}`))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeOpenAIResponse, "gpt-4o", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/responses",
+		`{"model":"gpt-4o","input":"hi"}`)
+
+	TextHandler(llm.APIFormatOpenAIResponse, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, recorder.Body.String())
+	}
+	if resp["model"] != "gpt-4o" {
+		t.Fatalf("model = %v, want gpt-4o", resp["model"])
+	}
+}
+
+func TestTextHandlerOpenAIEmbeddingRoundTrip(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","model":"text-embedding-3-small","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2,0.3]}],"usage":{"prompt_tokens":3,"total_tokens":3}}`))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeOpenAIEmbedding, "text-embedding-3-small", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/embeddings",
+		`{"model":"text-embedding-3-small","input":"hello"}`)
+
+	TextHandler(llm.APIFormatOpenAIEmbedding, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, recorder.Body.String())
+	}
+	if resp["model"] != "text-embedding-3-small" {
+		t.Fatalf("model = %v, want text-embedding-3-small", resp["model"])
+	}
+}
+
 func TestTextHandlerOpenAIChatStream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
