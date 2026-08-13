@@ -166,9 +166,51 @@ func scheduleAutoCandidates(groupID int, input []autoCandidate, cfg autoSchedule
 	})
 
 	s := getOrCreateAutoSchedule(groupID)
+	now := time.Now()
+
+	// 单候选快路径：无竞争，跳过份额/竞技池/探索选择计算，仅更新状态与记账
+	// （targetShare 恒为 1.0）。探索额度语义与主路径保持一致：候选可探索
+	// （欠采样且非 probe-dead/熔断）时消耗一次额度，否则保留不白扣。
+	if len(candidates) == 1 {
+		c := candidates[0]
+		due := c.stats.RealSamples() < cfg.MinSamples || c.stats.LastSeenAt.IsZero() || now.Sub(c.stats.LastSeenAt) >= AutoRankTimeWindow
+		s.mu.Lock()
+		s.lastSeen = now
+		s.sequence++
+		reconcileAutoScheduleCandidates(s, candidates)
+		if !s.initialized {
+			s.initialized = true
+			s.exploreCredit = 1
+		} else {
+			s.exploreCredit += math.Max(0, math.Min(1, cfg.ExploreRatio))
+		}
+		key := autoCandidateKey(c.item.ChannelID, c.item.ModelName)
+		s.candidates[key].targetShare = 1.0
+		if due && s.exploreCredit >= 1 {
+			if pool := exploreCandidates(candidates, candidates); len(pool) > 0 {
+				s.exploreCredit -= 1
+			}
+		}
+		markAutoCandidateOffered(s, c, "quality")
+		s.mu.Unlock()
+		return candidates
+	}
+
+	// 锁外纯计算：欠采样/竞技池/目标份额（只读 stats，各自带 per-entry 锁，
+	// 不触碰组级调度状态），把锁内工作量压到状态写回与选择。
+	due := make([]autoCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		// 欠采样判据用真实样本：主动探测补的是成功率信号，不能顶替真实流量样本，
+		// 否则被探测过的候选会退出探索池，却又因真实样本不足进不了竞技池而饿死。
+		if candidate.stats.RealSamples() < cfg.MinSamples || candidate.stats.LastSeenAt.IsZero() || now.Sub(candidate.stats.LastSeenAt) >= AutoRankTimeWindow {
+			due = append(due, candidate)
+		}
+	}
+	competitive := competitiveAutoCandidates(candidates, cfg)
+	channelTargets, modelTargets := computeAutoTargetShares(competitive, cfg)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
 	s.lastSeen = now
 	s.sequence++
 	reconcileAutoScheduleCandidates(s, candidates)
@@ -180,16 +222,9 @@ func scheduleAutoCandidates(groupID int, input []autoCandidate, cfg autoSchedule
 		s.exploreCredit += math.Max(0, math.Min(1, cfg.ExploreRatio))
 	}
 
-	due := make([]autoCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		// 欠采样判据用真实样本：主动探测补的是成功率信号，不能顶替真实流量样本，
-		// 否则被探测过的候选会退出探索池，却又因真实样本不足进不了竞技池而饿死。
-		if candidate.stats.RealSamples() < cfg.MinSamples || candidate.stats.LastSeenAt.IsZero() || now.Sub(candidate.stats.LastSeenAt) >= AutoRankTimeWindow {
-			due = append(due, candidate)
-		}
+	if len(competitive) > 0 {
+		applyAutoTargetShares(s, channelTargets, modelTargets)
 	}
-	competitive := competitiveAutoCandidates(candidates, cfg)
-	updateAutoTargetShares(s, competitive, cfg)
 
 	// 实际分配反馈纠偏：组内转发累计达到 FeedbackUpdateInterval 时，用 dispatched
 	// 实际份额更新各候选的 EWMA actualShare 与 feedbackPenalty，供公平选择降权。
@@ -208,7 +243,7 @@ func scheduleAutoCandidates(groupID int, input []autoCandidate, cfg autoSchedule
 	switch {
 	case len(explorePool) > 0:
 		s.exploreCredit -= 1
-		primary = leastRecentlyOffered(s, explorePool)
+		primary = selectExploreCandidate(s, explorePool)
 		reason = "explore"
 	case len(competitive) == 0:
 		primary = candidates[0]
@@ -302,13 +337,19 @@ func reconcileAutoScheduleCandidates(s *autoGroupScheduleState, candidates []aut
 	}
 }
 
-func leastRecentlyOffered(s *autoGroupScheduleState, candidates []autoCandidate) autoCandidate {
+// selectExploreCandidate 探索选择：欠采样优先（realSamples 升序），同欠采样度时
+// 按最近被提供顺序轮转（lastOfferedSeq 升序）。与 AutoRankProbeTask 的排序口径
+// （realSamples 升序 → 最近探测升序）对齐：探索预算优先花在样本最缺的候选上。
+func selectExploreCandidate(s *autoGroupScheduleState, candidates []autoCandidate) autoCandidate {
 	best := candidates[0]
+	bestSamples := best.stats.RealSamples()
 	bestSeq := s.candidates[autoCandidateKey(best.item.ChannelID, best.item.ModelName)].lastOfferedSeq
 	for _, candidate := range candidates[1:] {
 		seq := s.candidates[autoCandidateKey(candidate.item.ChannelID, candidate.item.ModelName)].lastOfferedSeq
-		if seq < bestSeq {
+		samples := candidate.stats.RealSamples()
+		if samples < bestSamples || (samples == bestSamples && seq < bestSeq) {
 			best = candidate
+			bestSamples = samples
 			bestSeq = seq
 		}
 	}
@@ -357,7 +398,9 @@ func competitiveAutoCandidates(candidates []autoCandidate, cfg autoScheduleConfi
 	return competitive
 }
 
-func updateAutoTargetShares(s *autoGroupScheduleState, candidates []autoCandidate, cfg autoScheduleConfig) {
+// computeAutoTargetShares 锁外计算渠道/模型目标份额（纯函数，只读候选得分）。
+// 返回渠道份额与“渠道→候选份额”两层映射，由 applyAutoTargetShares 锁内写回。
+func computeAutoTargetShares(candidates []autoCandidate, cfg autoScheduleConfig) (map[int]float64, map[int]map[string]float64) {
 	byChannel := make(map[int][]autoCandidate)
 	channelScores := make(map[int]float64)
 	for _, candidate := range candidates {
@@ -367,13 +410,22 @@ func updateAutoTargetShares(s *autoGroupScheduleState, candidates []autoCandidat
 			channelScores[channelID] = candidate.effectiveScore
 		}
 	}
-	for channelID, channelTarget := range cappedSoftmax(channelScores, cfg.ChannelMaxShare, cfg.SoftmaxTemp) {
-		modelScores := make(map[string]float64, len(byChannel[channelID]))
-		for _, candidate := range byChannel[channelID] {
-			key := autoCandidateKey(candidate.item.ChannelID, candidate.item.ModelName)
-			modelScores[key] = candidate.effectiveScore
+	channelTargets := cappedSoftmax(channelScores, cfg.ChannelMaxShare, cfg.SoftmaxTemp)
+	modelTargets := make(map[int]map[string]float64, len(byChannel))
+	for channelID, channelCandidates := range byChannel {
+		modelScores := make(map[string]float64, len(channelCandidates))
+		for _, candidate := range channelCandidates {
+			modelScores[autoCandidateKey(candidate.item.ChannelID, candidate.item.ModelName)] = candidate.effectiveScore
 		}
-		for key, modelTarget := range cappedSoftmax(modelScores, cfg.ModelMaxShare, cfg.SoftmaxTemp) {
+		modelTargets[channelID] = cappedSoftmax(modelScores, cfg.ModelMaxShare, cfg.SoftmaxTemp)
+	}
+	return channelTargets, modelTargets
+}
+
+// applyAutoTargetShares 锁内写回目标份额。调用方需持有 s.mu。
+func applyAutoTargetShares(s *autoGroupScheduleState, channelTargets map[int]float64, modelTargets map[int]map[string]float64) {
+	for channelID, channelTarget := range channelTargets {
+		for key, modelTarget := range modelTargets[channelID] {
 			s.candidates[key].targetShare = channelTarget * modelTarget
 		}
 	}

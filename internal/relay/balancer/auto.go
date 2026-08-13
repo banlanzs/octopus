@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -355,6 +356,7 @@ func AutoRankHealthForGroup(groupID, channelID int, modelName string) model.LLMA
 		LastDispatchedAt:  dispatch.LastDispatched,
 		SelectionReason:   dispatch.Reason,
 		Degraded:          IsChannelDegradedForGroup(groupID, channelID),
+		TrailSummary:      autoRankTrailForGroup(groupID, channelID, modelName),
 	}
 	tripped, remaining, tripCount := ChannelCircuitStatus(channelID)
 	h.ChannelTripped = tripped
@@ -464,7 +466,7 @@ func wilsonLowerBound(successes, samples int) float64 {
 func autoRankMinSamples() int {
 	minSamples, _ := op.SettingGetInt(model.SettingKeyAutoRankMinSamples)
 	if minSamples <= 0 {
-		minSamples = 3
+		minSamples = 5
 	}
 	return minSamples
 }
@@ -884,6 +886,8 @@ type AutoRankKeyedStats struct {
 	ChannelID int
 	ModelName string
 	Stats     AutoRankStats
+	// Trail 窗口样本时间序列 JSON（从旧到新），供快照落库后精确恢复。
+	Trail string
 }
 
 // AutoRankAllStats 遍历返回全部有有效样本的候选统计。
@@ -900,7 +904,7 @@ func AutoRankAllStats() []AutoRankKeyedStats {
 			return true
 		}
 		groupID, channelID, modelName := parseAutoRankGroupKey(k)
-		out = append(out, AutoRankKeyedStats{GroupID: groupID, ChannelID: channelID, ModelName: modelName, Stats: st})
+		out = append(out, AutoRankKeyedStats{GroupID: groupID, ChannelID: channelID, ModelName: modelName, Stats: st, Trail: e.sampleTrailJSON()})
 		return true
 	})
 	return out
@@ -924,36 +928,145 @@ func AutoRankRestore(snaps []model.AutoRankSnapshot) {
 		key := autoRankGroupKey(s.GroupID, s.ChannelID, s.ModelName)
 		e := getOrCreateAutoRank(key)
 		e.mu.Lock()
-		size := s.Samples
-		if size > AutoRankPhysicalCap {
-			size = AutoRankPhysicalCap
+		// 优先精确重建：SampleTrail 含窗口样本时间序列（时间分布/失败位置/延迟），
+		// 逐条还原；缺失或损坏时回退近似重建（假定最近 failures 条为失败）。
+		if !restoreAutoRankPrecise(e, s, lastSeen) {
+			restoreAutoRankApprox(e, s, lastSeen)
 		}
-		fails := s.Failures
-		if fails > s.Samples {
-			fails = s.Samples
-		}
-		probes := s.ProbeSamples
-		if probes > s.Samples {
-			probes = s.Samples
-		}
-		if size < s.Samples {
-			fails = int(math.Round(float64(fails) * float64(size) / float64(s.Samples)))
-			probes = int(math.Round(float64(probes) * float64(size) / float64(s.Samples)))
-		}
-		for i := 0; i < size; i++ {
-			e.buf[i] = autoRankSample{
-				at:      lastSeen,
-				success: i < size-fails,
-				probe:   i < probes,
-				durMS:   int64(s.EWMALatencyMS),
-				ttfbMS:  int64(s.EWMATTFBMS),
-			}
-		}
-		e.next = size % AutoRankPhysicalCap
-		e.size = size
-		e.lastSeen = lastSeen
 		e.mu.Unlock()
 	}
+}
+
+// autoRankTrailItem SampleTrail 中单条样本的记录。
+// AgeMS 为该样本距 LastSeenAt（最新样本时刻）的毫秒偏移。
+type autoRankTrailItem struct {
+	AgeMS  int64 `json:"age_ms"`
+	OK     bool  `json:"ok"`
+	Probe  bool  `json:"p"`
+	DurMS  int64 `json:"d"`
+	TTFBMS int64 `json:"t"`
+}
+
+// sampleTrail 导出窗口内样本时间序列（从旧到新，age 单调递减），供快照落库。
+func (e *autoRankEntry) sampleTrail() []autoRankTrailItem {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	trail := make([]autoRankTrailItem, 0, e.size)
+	lastSeen := e.lastSeen
+	for i := 0; i < e.size; i++ {
+		s := e.buf[(e.next-e.size+i+AutoRankPhysicalCap)%AutoRankPhysicalCap]
+		age := lastSeen.Sub(s.at).Milliseconds()
+		if age < 0 {
+			age = 0
+		}
+		trail = append(trail, autoRankTrailItem{AgeMS: age, OK: s.success, Probe: s.probe, DurMS: s.durMS, TTFBMS: s.ttfbMS})
+	}
+	return trail
+}
+
+// sampleTrailJSON SampleTrail 的 JSON 编码；空窗口返回 ""。
+func (e *autoRankEntry) sampleTrailJSON() string {
+	trail := e.sampleTrail()
+	if len(trail) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(trail)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// restoreAutoRankPrecise 用 SampleTrail 精确重建窗口。样本时间按 age_ms 反推
+// （at = lastSeen - age），保留时间分布、失败位置与逐条延迟；EWMA 在读取时由
+// statsLocked 从真实样本重新计算。数据缺失/损坏/越界时返回 false 放弃。
+func restoreAutoRankPrecise(e *autoRankEntry, s model.AutoRankSnapshot, lastSeen time.Time) bool {
+	if s.SampleTrail == "" {
+		return false
+	}
+	var trail []autoRankTrailItem
+	if err := json.Unmarshal([]byte(s.SampleTrail), &trail); err != nil {
+		return false
+	}
+	if len(trail) == 0 || len(trail) > AutoRankPhysicalCap {
+		return false
+	}
+	for i, item := range trail {
+		if item.AgeMS < 0 {
+			return false
+		}
+		if i > 0 && trail[i-1].AgeMS < item.AgeMS {
+			return false // age 需单调不增（从旧到新），乱序视为损坏
+		}
+		at := lastSeen.Add(-time.Duration(item.AgeMS) * time.Millisecond)
+		if at.After(lastSeen) {
+			return false
+		}
+		e.buf[i] = autoRankSample{at: at, success: item.OK, probe: item.Probe, durMS: item.DurMS, ttfbMS: item.TTFBMS}
+	}
+	e.next = len(trail) % AutoRankPhysicalCap
+	e.size = len(trail)
+	e.lastSeen = lastSeen
+	return true
+}
+
+// restoreAutoRankApprox 近似重建（旧版行为）：假定最近 failures 条为失败，
+// 时间戳统一为 lastSeen，延迟用 EWMA 均值。恢复的样本随后被真实流量逐条覆盖。
+func restoreAutoRankApprox(e *autoRankEntry, s model.AutoRankSnapshot, lastSeen time.Time) {
+	size := s.Samples
+	if size > AutoRankPhysicalCap {
+		size = AutoRankPhysicalCap
+	}
+	fails := s.Failures
+	if fails > s.Samples {
+		fails = s.Samples
+	}
+	probes := s.ProbeSamples
+	if probes > s.Samples {
+		probes = s.Samples
+	}
+	if size < s.Samples {
+		fails = int(math.Round(float64(fails) * float64(size) / float64(s.Samples)))
+		probes = int(math.Round(float64(probes) * float64(size) / float64(s.Samples)))
+	}
+	for i := 0; i < size; i++ {
+		e.buf[i] = autoRankSample{
+			at:      lastSeen,
+			success: i < size-fails,
+			probe:   i < probes,
+			durMS:   int64(s.EWMALatencyMS),
+			ttfbMS:  int64(s.EWMATTFBMS),
+		}
+	}
+	e.next = size % AutoRankPhysicalCap
+	e.size = size
+	e.lastSeen = lastSeen
+}
+
+// autoRankTrailForGroup 生成窗口样本时间线摘要（✓ 成功 / ✗ 失败 / p 探测，
+// 从旧到新），供管理面板直观展示排序依据；无样本返回空串。
+func autoRankTrailForGroup(groupID, channelID int, modelName string) string {
+	key := autoRankGroupKey(groupID, channelID, modelName)
+	v, ok := globalAutoRank.Load(key)
+	if !ok {
+		return ""
+	}
+	trail := v.(*autoRankEntry).sampleTrail()
+	if len(trail) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.Grow(len(trail))
+	for _, item := range trail {
+		if item.Probe {
+			sb.WriteString("p")
+		} else if item.OK {
+			sb.WriteString("✓")
+		} else {
+			sb.WriteString("✗")
+		}
+	}
+	return sb.String()
 }
 
 // AutoRankReap 回收 lastSeen 早于 now-ttl 的窗口（已删除渠道/长期无流量）。

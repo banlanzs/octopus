@@ -129,12 +129,12 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyAutoRankEnabled, Value: "true"},    // 默认启用自动排序（仅在分组切换为 Auto 模式时生效）
 		{Key: SettingKeyAutoRankInterval, Value: "60"},     // 默认每 60 秒执行一次快照落库与内存回收
 		{Key: SettingKeyAutoRankExploreRatio, Value: "20"}, // 默认 20% 请求用于探索欠采样候选（冷启动模型需足够机会积累样本）
-		{Key: SettingKeyAutoRankMinSamples, Value: "3"},    // 样本 ≥3 条才按得分参与排序
+		{Key: SettingKeyAutoRankMinSamples, Value: "5"},    // 样本 ≥5 条才按得分参与排序（3 条时 Wilson 置信下界噪声大，易震荡）
 		{Key: SettingKeyAutoRankChannelFactorEnabled, Value: "true"}, // 默认启用渠道级聚合健康修正
 		{Key: SettingKeyAutoRankChannelMinSamples, Value: "8"},       // 渠道聚合样本 ≥8 条才评估
 		{Key: SettingKeyAutoRankChannelMinModels, Value: "2"},        // ≥2 个模型同时失败才触发渠道降级
 		{Key: SettingKeyAutoRankChannelDegradeRate, Value: "85"},     // 聚合成功率 <85% 进入惩罚
-		{Key: SettingKeyAutoRankTTFBEnabled, Value: "false"},         // 相对 TTFB 惩罚默认关闭，保守上线
+		{Key: SettingKeyAutoRankTTFBEnabled, Value: "true"},          // 相对 TTFB 惩罚默认开启（权重温和且带置信度打折保护）
 		{Key: SettingKeyAutoRankTTFBWeight, Value: "20"},             // TTFB 惩罚权重 20
 		{Key: SettingKeyAutoRankTTFBMaxSlowRatio, Value: "200"},      // 慢速比上限 2.0
 		{Key: SettingKeyAutoRankTTFBMinConfidentSample, Value: "10"}, // TTFB 置信样本 10

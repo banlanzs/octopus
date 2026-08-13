@@ -92,6 +92,9 @@ type LLMAutoRankHealth struct {
 	ChannelCooldownSec int64 `json:"channel_cooldown_sec"`
 	// ChannelTripCount 渠道级累计熔断触发次数（指数退避依据）。
 	ChannelTripCount int64 `json:"channel_trip_count"`
+	// TrailSummary 窗口样本时间线摘要（✓ 成功 / ✗ 失败 / p 探测，从旧到新，最多 20 字符）。
+	// 直观展示排序依据，供管理面板健康徽章提示展示；无样本时为空。
+	TrailSummary string `json:"trail_summary,omitempty"`
 }
 
 type GeminiModel struct {

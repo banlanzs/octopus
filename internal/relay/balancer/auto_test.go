@@ -81,8 +81,9 @@ func TestScoreFromStats(t *testing.T) {
 
 func TestAutoRankLessTiers(t *testing.T) {
 	no := AutoRankStats{}
+	// minSamples 默认 5：5 条即“充足档”，4 条属“样本不足档”。
 	enough := AutoRankStats{Samples: 5, SuccessRate: 0.9, EWMALatencyMS: 1000}
-	fast := AutoRankStats{Samples: 4, SuccessRate: 1, EWMALatencyMS: 300}
+	fast := AutoRankStats{Samples: 6, SuccessRate: 1, EWMALatencyMS: 300}
 
 	if autoRankLess(no, enough) {
 		t.Fatal("expected no-sample candidate to rank after enough-sample candidate")
@@ -96,7 +97,7 @@ func TestAutoRankLessTiers(t *testing.T) {
 	if autoRankLess(enough, fast) {
 		t.Fatal("expected slower candidate not to rank before faster one")
 	}
-	if autoRankLess(fast, AutoRankStats{Samples: 4, SuccessRate: 1, EWMALatencyMS: 300}) {
+	if autoRankLess(fast, AutoRankStats{Samples: 6, SuccessRate: 1, EWMALatencyMS: 300}) {
 		t.Fatal("expected equal candidates to keep original order")
 	}
 }
@@ -841,8 +842,129 @@ func TestAutoScheduleExploreAllTrippedFallsBack(t *testing.T) {
 	if len(ordered) == 0 || ordered[0].item.ChannelID == 0 {
 		t.Fatalf("全熔断时应回退原池仍返回主候选, got: %+v", ordered)
 	}
-	// 回退池按 leastRecentlyOffered 选择（未 offer 过时取池中第一个）
+	// 全熔断时探索池为空、竞技池为空 → 回退到排序后的首位候选（channel 1）
 	if ordered[0].item.ChannelID != 1 {
 		t.Fatalf("回退池应保持原顺序, got: %+v", ordered[0])
+	}
+}
+
+// 优化 1：SampleTrail 精确重建 —— 时间分布/失败位置/逐条延迟与原始一致。
+func TestAutoRankRestorePrecise(t *testing.T) {
+	AutoRankReset()
+	now := time.Now()
+	// 从旧到新：✓500ms / ✓800ms / ✗ / ✓600ms，age 单调递减
+	trail := `[{"age_ms":9000,"ok":true,"d":500,"t":200},{"age_ms":6000,"ok":true,"d":800,"t":300},{"age_ms":3000,"ok":false,"d":0,"t":0},{"age_ms":0,"ok":true,"d":600,"t":250}]`
+	AutoRankRestore([]model.AutoRankSnapshot{
+		{GroupID: 8, ChannelID: 80, ModelName: "gpt-4o", Samples: 4, Failures: 1, SampleTrail: trail, LastSeenAt: now},
+	})
+	st := GetAutoRankStatsForGroup(8, 80, "gpt-4o")
+	if st.Samples != 4 || st.Failures != 1 {
+		t.Fatalf("expected precise restore 4 samples 1 failure, got %+v", st)
+	}
+	// EWMA 由逐条延迟重建（非全量均值）：500 → 0.7*500+0.3*800=590 → 0.7*590+0.3*600=593
+	if st.EWMALatencyMS < 592 || st.EWMALatencyMS > 594 {
+		t.Fatalf("expected EWMA rebuilt from per-sample latency ≈593, got %v", st.EWMALatencyMS)
+	}
+	// TTFB EWMA：200 → 230 → 236
+	if st.EWMATTFBMS < 235 || st.EWMATTFBMS > 237 {
+		t.Fatalf("expected TTFB EWMA ≈236, got %v", st.EWMATTFBMS)
+	}
+}
+
+// 优化 1：trail 缺失/损坏/乱序时回退近似重建（旧版行为），不 panic、不丢数据。
+func TestAutoRankRestoreFallsBackToApprox(t *testing.T) {
+	// 空 trail（旧版快照行）
+	AutoRankReset()
+	AutoRankRestore([]model.AutoRankSnapshot{
+		{ChannelID: 81, ModelName: "gpt-4o", Samples: 10, Failures: 2, EWMALatencyMS: 800, LastSeenAt: time.Now()},
+	})
+	if st := GetAutoRankStats(81, "gpt-4o"); st.Samples != 10 || st.Failures != 2 || st.EWMALatencyMS != 800 {
+		t.Fatalf("expected approx fallback for empty trail, got %+v", st)
+	}
+
+	// 非法 JSON
+	AutoRankReset()
+	AutoRankRestore([]model.AutoRankSnapshot{
+		{ChannelID: 82, ModelName: "gpt-4o", Samples: 5, Failures: 1, SampleTrail: "{not-json", EWMALatencyMS: 700, LastSeenAt: time.Now()},
+	})
+	if st := GetAutoRankStats(82, "gpt-4o"); st.Samples != 5 || st.Failures != 1 || st.EWMALatencyMS != 700 {
+		t.Fatalf("expected approx fallback for corrupt trail, got %+v", st)
+	}
+
+	// age 乱序（新在前旧在后）
+	AutoRankReset()
+	bad := `[{"age_ms":0,"ok":true,"d":100},{"age_ms":5000,"ok":false,"d":0}]`
+	AutoRankRestore([]model.AutoRankSnapshot{
+		{ChannelID: 83, ModelName: "gpt-4o", Samples: 2, Failures: 1, SampleTrail: bad, EWMALatencyMS: 400, LastSeenAt: time.Now()},
+	})
+	if st := GetAutoRankStats(83, "gpt-4o"); st.Samples != 2 || st.Failures != 1 {
+		t.Fatalf("expected approx fallback for unordered trail, got %+v", st)
+	}
+}
+
+// 优化 3：探索欠采样优先 —— 0 样本候选持续优先于 1 样本候选。
+func TestExplorePrefersUnderSampled(t *testing.T) {
+	Reset() // 清渠道熔断状态：探索剔除逻辑会查 breaker，避免前序测试残留污染
+	AutoRankReset()
+	const gid = 700
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 1, ModelName: "m1"}, AutoRankStats{Samples: 1, SuccessRate: 1, SuccessConfidence: 1}, 99),
+		newAutoCandidate(model.GroupItem{ChannelID: 2, ModelName: "m2"}, AutoRankStats{}, 0),
+	}
+	cfg := testAutoScheduleConfig(1.0) // 100% 探索
+	seen := map[string]int{}
+	for i := 0; i < 10; i++ {
+		ordered := scheduleAutoCandidates(gid, candidates, cfg)
+		seen[ordered[0].item.ModelName]++
+	}
+	if seen["m1"] > 0 {
+		t.Fatalf("探索应优先欠采样的 m2(0 样本), 却选了 m1: %v", seen)
+	}
+	if seen["m2"] == 0 {
+		t.Fatalf("m2 应持续被探索, got: %v", seen)
+	}
+}
+
+// 优化 6：单候选快路径仍正确记账（rank/targetShare/顺序稳定）。
+func TestScheduleSingleCandidateFastPath(t *testing.T) {
+	AutoRankReset()
+	candidates := []autoCandidate{
+		newAutoCandidate(model.GroupItem{ChannelID: 5, ModelName: "m1"}, AutoRankStats{Samples: 20, SuccessRate: 1, SuccessConfidence: 0.95}, 95),
+	}
+	ordered := scheduleAutoCandidates(800, candidates, testAutoScheduleConfig(0))
+	if len(ordered) != 1 || ordered[0].item.ChannelID != 5 {
+		t.Fatalf("expected single candidate passthrough, got %+v", ordered)
+	}
+	stats := GetAutoDispatchStats(800, 5, "m1")
+	if stats.Rank != 1 || stats.TargetShare != 1.0 {
+		t.Fatalf("expected rank=1 targetShare=1.0 on fast path, got %+v", stats)
+	}
+	for i := 0; i < 5; i++ {
+		if o := scheduleAutoCandidates(800, candidates, testAutoScheduleConfig(0)); len(o) != 1 {
+			t.Fatalf("fast path unstable: %+v", o)
+		}
+	}
+}
+
+// 优化 5：min_samples 无设置记录时回退默认 5。
+func TestAutoRankMinSamplesDefault(t *testing.T) {
+	if got := autoRankMinSamples(); got != 5 {
+		t.Fatalf("expected fallback min samples 5, got %d", got)
+	}
+}
+
+// 可观测性：TrailSummary 时间线（✓/✗/p）从旧到新，HealthFor 透传。
+func TestAutoRankTrailSummary(t *testing.T) {
+	AutoRankReset()
+	RecordAutoSample(9, "m1", true, 100)
+	RecordAutoSample(9, "m1", false, 0)
+	RecordAutoProbeSampleForGroup(0, 9, "m1", true)
+	RecordAutoSample(9, "m1", true, 120)
+	sum := autoRankTrailForGroup(0, 9, "m1")
+	if sum != "✓✗p✓" {
+		t.Fatalf("expected trail summary ✓✗p✓, got %q", sum)
+	}
+	if h := AutoRankHealthFor(9, "m1"); h.TrailSummary != sum {
+		t.Fatalf("expected health trail summary %q, got %q", sum, h.TrailSummary)
 	}
 }

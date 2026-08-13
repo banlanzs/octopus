@@ -15,6 +15,9 @@ type AutoRankSnapshot struct {
 	SuccessRate   float64   `json:"success_rate" gorm:"not null;default:0"`  // 成功率（冗余，便于展示）
 	EWMALatencyMS float64   `json:"ewma_latency_ms" gorm:"not null;default:0"`
 	EWMATTFBMS    float64   `json:"ewma_ttfb_ms" gorm:"not null;default:0"`
+	// SampleTrail 窗口内样本时间序列(JSON, 从旧到新, 每条含 age_ms/成功/探测/耗时)。
+	// 供重启后精确恢复窗口的时间分布与失败位置; 旧行/损坏数据为空, 恢复时回退近似重建。
+	SampleTrail string    `json:"sample_trail" gorm:"type:text"`
 	LastSeenAt    time.Time `json:"last_seen_at" gorm:"index"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

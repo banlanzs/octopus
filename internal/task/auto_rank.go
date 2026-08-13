@@ -43,9 +43,13 @@ func AutoRankTask() {
 		channelID int
 		modelName string
 	}
-	statByKey := make(map[snapshotKey]balancer.AutoRankStats)
+	type snapshotEntry struct {
+		stats balancer.AutoRankStats
+		trail string
+	}
+	statByKey := make(map[snapshotKey]snapshotEntry)
 	for _, ks := range balancer.AutoRankAllStats() {
-		statByKey[snapshotKey{groupID: ks.GroupID, channelID: ks.ChannelID, modelName: ks.ModelName}] = ks.Stats
+		statByKey[snapshotKey{groupID: ks.GroupID, channelID: ks.ChannelID, modelName: ks.ModelName}] = snapshotEntry{stats: ks.Stats, trail: ks.Trail}
 	}
 
 	var snaps []model.AutoRankSnapshot
@@ -54,10 +58,11 @@ func AutoRankTask() {
 			continue
 		}
 		for _, item := range group.Items {
-			st, ok := statByKey[snapshotKey{groupID: group.ID, channelID: item.ChannelID, modelName: item.ModelName}]
+			entry, ok := statByKey[snapshotKey{groupID: group.ID, channelID: item.ChannelID, modelName: item.ModelName}]
 			if !ok {
 				continue
 			}
+			st := entry.stats
 			snaps = append(snaps, model.AutoRankSnapshot{
 				GroupID:       group.ID,
 				ChannelID:     item.ChannelID,
@@ -68,12 +73,13 @@ func AutoRankTask() {
 				SuccessRate:   st.SuccessRate,
 				EWMALatencyMS: st.EWMALatencyMS,
 				EWMATTFBMS:    st.EWMATTFBMS,
+				SampleTrail:   entry.trail,
 				LastSeenAt:    st.LastSeenAt,
 				UpdatedAt:     now,
 			})
 		}
 	}
-	if err := op.AutoRankSnapshotReplaceAll(ctx, snaps); err != nil {
-		log.Warnf("auto rank snapshot replace failed: %v", err)
+	if err := op.AutoRankSnapshotSync(ctx, snaps); err != nil {
+		log.Warnf("auto rank snapshot sync failed: %v", err)
 	}
 }
