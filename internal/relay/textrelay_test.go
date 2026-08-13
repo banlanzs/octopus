@@ -649,6 +649,20 @@ func TestTextHandlerAnthropicPassthroughStream(t *testing.T) {
 	}
 }
 
+func TestTextRelayReplaySticky(t *testing.T) {
+	storeTextRelayReplaySticky("resp_1", 100, 200)
+	entry := loadTextRelayReplaySticky("resp_1")
+	if entry == nil || entry.ChannelID != 100 || entry.ChannelKeyID != 200 {
+		t.Fatalf("sticky entry = %+v, want channel 100 key 200", entry)
+	}
+	if loadTextRelayReplaySticky("unknown") != nil {
+		t.Fatal("expected nil for unknown response id")
+	}
+	if loadTextRelayReplaySticky("") != nil {
+		t.Fatal("expected nil for empty response id")
+	}
+}
+
 func TestTextHandlerOpenAIChatStream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

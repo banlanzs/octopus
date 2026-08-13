@@ -79,7 +79,12 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		return
 	}
 	apiKeyID := c.GetInt("api_key_id")
-	iter := balancer.NewIterator(group, apiKeyID, llmReq.Model)
+	// responses 续传粘性：previous_response_id 命中时优先路由回上次成功的渠道/key。
+	var preferredSticky *balancer.SessionEntry
+	if llmReq.PreviousResponseID != nil && *llmReq.PreviousResponseID != "" {
+		preferredSticky = loadTextRelayReplaySticky(*llmReq.PreviousResponseID)
+	}
+	iter := balancer.NewIteratorWithPreference(group, apiKeyID, llmReq.Model, preferredSticky)
 	if iter.Len() == 0 {
 		resp.Error(c, http.StatusServiceUnavailable, "no available channel")
 		return
@@ -298,6 +303,11 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 
 			// 渠道健康闭环：成功样本 + 熔断/粘性/统计，随后质量检测（可能追加失败样本）。
 			recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
+
+			// 保存 responses 续传粘性（previous_response_id → 渠道）。
+			if format == llm.APIFormatOpenAIResponse && llmResp.ID != "" {
+				storeTextRelayReplaySticky(llmResp.ID, channel.ID, usedKey.ID)
+			}
 
 			// 质量失败检测（工具循环短输出）：与现有 relay 语义一致。
 			if llmResp.Usage != nil {
