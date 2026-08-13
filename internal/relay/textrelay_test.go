@@ -140,6 +140,46 @@ func TestTextHandlerAnthropicMessagesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTextHandlerRecordsRelayLog(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-metrics","object":"chat.completion","model":"gpt-4o-metrics","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}`))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeOpenAIChat, "gpt-4o-metrics", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"gpt-4o-metrics","messages":[{"role":"user","content":"hi"}]}`)
+
+	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+
+	logs, err := op.RelayLogList(context.Background(), nil, nil, nil, 1, 10)
+	if err != nil {
+		t.Fatalf("RelayLogList failed: %v", err)
+	}
+	found := false
+	for _, l := range logs {
+		if l.RequestModelName != "gpt-4o-metrics" {
+			continue
+		}
+		found = true
+		if !l.Success {
+			t.Errorf("relay log success = false, want true")
+		}
+		if l.InputTokens != 10 || l.OutputTokens != 4 {
+			t.Errorf("tokens = %d/%d, want 10/4", l.InputTokens, l.OutputTokens)
+		}
+	}
+	if !found {
+		t.Fatal("relay log for gpt-4o-metrics not found")
+	}
+}
+
 func TestTextHandlerOpenAIChatStream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

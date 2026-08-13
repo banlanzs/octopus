@@ -12,6 +12,7 @@ import (
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/tokenizer"
+	"github.com/looplj/axonhub/llm"
 )
 
 // RelayMetrics 负责最终的日志收集与持久化
@@ -55,6 +56,11 @@ type RelayMetrics struct {
 	// ReasoningEffort 记录本次请求的推理强度（reasoning_effort / output_config.effort 值）。
 	// 从 InternalRequest 提取，供日志页展示。
 	ReasoningEffort string
+
+	// AxonResponse 保存 axonhub 归一化响应（llm.Response），供文本迁移路径
+	// 记录日志与用量。与 InternalResponse 互斥：文本路径用 AxonResponse，
+	// 自研路径（WS/compact/images）用 InternalResponse。
+	AxonResponse *llm.Response
 }
 
 func NewRelayMetrics(apiKeyID int, requestModel string, rawBody []byte, req *transformerModel.InternalLLMRequest) *RelayMetrics {
@@ -147,6 +153,42 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 	}
 }
 
+// SetAxonResponse 从 axonhub 归一化响应（llm.Response）提取用量与成本，
+// 供文本迁移路径（TextHandler）复用 RelayMetrics 的日志/统计链路。
+// 计费口径与 SetInternalResponse 一致：缓存读/缓存写/普通输入三档分别计费。
+func (m *RelayMetrics) SetAxonResponse(resp *llm.Response, actualModel string, channelID int) {
+	m.AxonResponse = resp
+	m.ActualModel = actualModel
+
+	if resp == nil || resp.Usage == nil {
+		return
+	}
+
+	usage := resp.Usage
+	m.Stats.InputToken = usage.PromptTokens
+	m.Stats.OutputToken = usage.CompletionTokens
+
+	var cacheRead, cacheWrite int64
+	if usage.PromptTokensDetails != nil {
+		cacheRead = usage.PromptTokensDetails.CachedTokens
+		cacheWrite = usage.PromptTokensDetails.WriteCachedTokens
+	}
+	nonCached := usage.PromptTokens - cacheRead - cacheWrite
+	if nonCached < 0 {
+		nonCached = usage.PromptTokens
+	}
+	m.BillInputTokens = intPtr(int(nonCached))
+	m.CacheReadTokens = intPtr(int(cacheRead))
+	m.CacheWriteTokens = intPtr(int(cacheWrite))
+
+	if modelPrice := resolveModelPrice(channelID, actualModel); modelPrice != nil {
+		m.Stats.InputCost = (float64(cacheRead)*modelPrice.CacheRead +
+			float64(cacheWrite)*modelPrice.CacheWrite +
+			float64(nonCached)*modelPrice.Input) * 1e-6
+		m.Stats.OutputCost = float64(usage.CompletionTokens) * modelPrice.Output * 1e-6
+	}
+}
+
 func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attempts []model.ChannelAttempt) {
 	m.SaveWithChannelStats(ctx, success, err, attempts, true)
 }
@@ -180,8 +222,14 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 	op.StatsSiteModelHourlyRecordAttempts(attempts, m.ActualModel)
 
 	// 上游未上报 usage（或输入侧全为 0）时打告警，便于定位是哪个通道缺失 usage。
-	if success && (m.InternalResponse == nil || m.InternalResponse.Usage == nil ||
-		m.InternalResponse.Usage.EffectiveInputTokens() == 0) {
+	usageMissing := false
+	if m.AxonResponse != nil {
+		usageMissing = m.AxonResponse.Usage == nil || m.AxonResponse.Usage.PromptTokens == 0
+	} else {
+		usageMissing = m.InternalResponse == nil || m.InternalResponse.Usage == nil ||
+			m.InternalResponse.Usage.EffectiveInputTokens() == 0
+	}
+	if success && usageMissing {
 		fallbackInput := 0
 		if m.TransportInputTokens != nil {
 			fallbackInput = *m.TransportInputTokens
@@ -349,6 +397,12 @@ func wsRecoveryPtr(value model.RelayLogWSRecovery) *model.RelayLogWSRecovery {
 // 转换失败或无适配器时回退为内部 OpenAI 格式序列化。
 // 返回空字符串表示无可记录内容。
 func (m *RelayMetrics) responseContentForLog(ctx context.Context) string {
+	if m.AxonResponse != nil {
+		if respBytes, err := json.Marshal(m.AxonResponse); err == nil {
+			return string(respBytes)
+		}
+		return ""
+	}
 	if m.InternalResponse == nil {
 		return ""
 	}
