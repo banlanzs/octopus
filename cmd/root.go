@@ -18,6 +18,10 @@ var rootCmd = &cobra.Command{
 var doubleClickLaunch bool
 
 func Execute() {
+	// 禁用 cobra 的 Windows mousetrap：默认情况下 cobra 检测到进程由
+	// explorer.exe（双击）启动时会打印 "This is a command line tool..." 并退出。
+	// 本程序支持双击直接启动（等效 start），因此清空提示文本禁用该拦截。
+	cobra.MousetrapHelpText = ""
 	if len(os.Args) == 1 {
 		doubleClickLaunch = true
 		os.Args = append(os.Args, "start")
