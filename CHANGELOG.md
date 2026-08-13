@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### 文本 API 转换迁移至 axonhub/llm（全量替换 + 各取所长）
+
+- **Go 工具链升级**：`go 1.25` → `go 1.26`，并引入 `github.com/looplj/axonhub/llm@fc1d27da`（GitHub unstable 固定 sha）+ `wtj-0527/go-sse` fork replace。
+- **协议转换迁移**：文本 HTTP 路径（`/v1/chat/completions`、`/v1/messages`、`/v1/responses`、`/v1/embeddings`）的协议转换从自研 `internal/transformer` 迁到 axonhub/llm，新增 `internal/relay/axonadapter`（格式映射 + transformer 工厂）与 `internal/relay/textrelay.go`（TextHandler 转发入口）。
+- **保留本地网关特性（各取所长）**：迭代器选通道、渠道健康闭环（熔断/AutoRank/粘性/outlier/统计）、质量失败检测、路由学习、参数覆盖/自定义 header、同通道重试（指数退避）、首 token 超时、SSE 心跳、同格式直通（anthropic 字节稳定保 prompt caching）均已适配到 TextHandler。
+- **volcengine 处置**：火山渠道改用 axonhub responses outbound（协议一致）并补齐火山特化（thinking/partial input/metadata/reasoning 白名单）。
+- **路由切换**：`/v1/chat/completions`、`/v1/messages`、`/v1/responses`、`/v1/embeddings` 一次性切到 TextHandler；`/v1/responses/compact`、`/v1/responses`(WS) 与图片路由保留自研。
+- **审计与补偿**：`internal/relay/axonadapter/MIGRATION_AUDIT.md` 记录自研边界修复与 axonhub 能力对照（volcengine Responses 特化、孤儿 tool_use、finishreason canonical 层）。
+
 ### 自动排序 (AutoRank) 全面优化
 
 - **快照精确恢复**：`auto_rank_snapshots` 新增 `sample_trail` 列，保存窗口内最近 20 条样本的时间序列（时间偏移/成败/耗时/探测标记）。重启后按样本时间线精确重建窗口（时间分布、失败位置、逐条延迟），不再使用"最近 failures 条为失败"的近似假设；旧快照行自动回退近似重建，兼容升级。
