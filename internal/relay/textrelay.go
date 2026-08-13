@@ -2,12 +2,15 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/helper"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/outlierwindow"
 	"github.com/bestruirui/octopus/internal/relay/axonadapter"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/server/resp"
@@ -136,6 +139,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 			usage, ferr := forwardAxonStream(ctx, httpClient, outAdapter, inAdapter, outReq, c)
 			if ferr != nil {
 				span.End(dbmodel.AttemptFailed, 0, ferr.Error())
+				recordAxonFailure(group, channel, usedKey, span, item.ModelName, axonErrorStatusCode(ferr), ferr)
 				lastErr = ferr
 				continue
 			}
@@ -145,6 +149,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 			} else {
 				metrics.ActualModel = item.ModelName
 			}
+			recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
 			metrics.Save(ctx, true, nil, iter.Attempts())
 			return
 		}
@@ -152,6 +157,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		httpResp, err := httpClient.Do(ctx, outReq)
 		if err != nil {
 			span.End(dbmodel.AttemptFailed, 0, err.Error())
+			recordAxonFailure(group, channel, usedKey, span, item.ModelName, axonErrorStatusCode(err), err)
 			maybeLearnManagedRouteAxon(ctx, channel.ID, item.ModelName, format, err)
 			lastErr = err
 			continue
@@ -161,6 +167,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		llmResp, err := outAdapter.TransformResponse(ctx, httpResp)
 		if err != nil {
 			span.End(dbmodel.AttemptFailed, 0, err.Error())
+			recordAxonFailure(group, channel, usedKey, span, item.ModelName, axonErrorStatusCode(err), err)
 			maybeLearnManagedRouteAxon(ctx, channel.ID, item.ModelName, format, err)
 			lastErr = err
 			continue
@@ -168,12 +175,16 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		outResp, err := inAdapter.TransformResponse(ctx, llmResp)
 		if err != nil {
 			span.End(dbmodel.AttemptFailed, 0, err.Error())
+			recordAxonFailure(group, channel, usedKey, span, item.ModelName, axonErrorStatusCode(err), err)
 			lastErr = err
 			continue
 		}
 
 		span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
 		metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
+
+		// 渠道健康闭环：成功样本 + 熔断/粘性/统计，随后质量检测（可能追加失败样本）。
+		recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
 
 		// 质量失败检测（工具循环短输出）：与现有 relay 语义一致。
 		if llmResp.Usage != nil {
@@ -192,6 +203,48 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	}
 	metrics.Save(ctx, false, lastErr, iter.Attempts())
 	resp.Error(c, http.StatusBadGateway, lastErr.Error())
+}
+
+// axonErrorStatusCode 从 axonhub httpclient 错误中提取上游 HTTP 状态码。
+func axonErrorStatusCode(err error) int {
+	var he *httpclient.Error
+	if errors.As(err, &he) {
+		return he.StatusCode
+	}
+	return 0
+}
+
+// recordAxonSuccess 记录文本路径成功后的渠道健康闭环：
+// key 状态/成本、渠道统计、熔断成功、粘性、outlier、AutoRank 样本。
+func recordAxonSuccess(group dbmodel.Group, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, metrics *RelayMetrics, span *balancer.AttemptSpan, modelName string, statusCode int) {
+	usedKey.TotalCost += metrics.Stats.InputCost + metrics.Stats.OutputCost
+	usedKey.StatusCode = statusCode
+	usedKey.LastUseTimeStamp = time.Now().Unix()
+	_ = op.ChannelKeyUpdate(usedKey)
+
+	op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{
+		WaitTime:       span.Duration().Milliseconds(),
+		RequestSuccess: 1,
+	})
+	balancer.RecordSuccess(channel.ID, usedKey.ID, modelName)
+	balancer.SetSticky(metrics.APIKeyID, metrics.RequestModel, channel.ID, usedKey.ID)
+	outlierwindow.Report(channel.ID, true, statusCode, time.Now())
+	recordAutoRankResult(group, channel.ID, modelName, true, statusCode, span.Duration().Milliseconds(), 0)
+}
+
+// recordAxonFailure 记录文本路径失败后的渠道健康闭环：
+// key 状态、渠道统计、熔断失败、AutoRank 失败样本。
+func recordAxonFailure(group dbmodel.Group, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, span *balancer.AttemptSpan, modelName string, statusCode int, err error) {
+	usedKey.StatusCode = statusCode
+	usedKey.LastUseTimeStamp = time.Now().Unix()
+	_ = op.ChannelKeyUpdate(usedKey)
+
+	op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{
+		WaitTime:      span.Duration().Milliseconds(),
+		RequestFailed: 1,
+	})
+	balancer.RecordFailure(channel.ID, usedKey.ID, modelName, circuitFailureKind(group.RetryEnabled, statusCode))
+	recordAutoRankResult(group, channel.ID, modelName, false, statusCode, span.Duration().Milliseconds(), 0)
 }
 
 // writeAxonResponse 将 axonhub 归一化响应写回 gin 客户端。
