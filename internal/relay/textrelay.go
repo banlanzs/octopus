@@ -141,6 +141,39 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				break
 			}
 
+			isStream := llmReq.Stream != nil && *llmReq.Stream
+
+			// 同格式直通（anthropic → anthropic，非流式）：字节稳定转发保 prompt caching。
+			if !isStream && isAnthropicPassthrough(format, channelType) {
+				span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
+				lastSpan = span
+				sc, llmResp, perr := passthroughAnthropicNonStream(ctx, channel, usedKey, httpReq.Body, item.ModelName, c, outAdapter)
+				if perr != nil {
+					span.End(dbmodel.AttemptFailed, sc, perr.Error())
+					recordAxonAttemptFailure(channel, usedKey, span, sc)
+					lastStatusCode = sc
+					lastAttemptErr = perr
+					if !isRetryableStatus(sc) {
+						break
+					}
+					continue
+				}
+				span.End(dbmodel.AttemptSuccess, sc, "")
+				if llmResp != nil {
+					metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
+				} else {
+					metrics.ActualModel = item.ModelName
+				}
+				recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, sc)
+				if llmResp != nil && llmResp.Usage != nil {
+					if outputTokens := llmResp.Usage.CompletionTokens; isQualityFailureResponseAxon(llmReq, outputTokens) {
+						recordQualityFailure(group, channel.ID, usedKey.ID, item.ModelName, outputTokens, span.Duration().Milliseconds(), 0)
+					}
+				}
+				metrics.Save(ctx, true, nil, iter.Attempts())
+				return
+			}
+
 			// 每次尝试都把统一请求的模型名改为本次候选的上游模型。
 			llmReq.Model = item.ModelName
 

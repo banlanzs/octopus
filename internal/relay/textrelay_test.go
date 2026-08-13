@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -217,6 +218,59 @@ func TestTextHandlerSameChannelRetry(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 2 {
 		t.Fatalf("upstream attempts = %d, want 2", got)
+	}
+}
+
+func TestTextHandlerAnthropicPassthrough(t *testing.T) {
+	var receivedBody atomic.Value // string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		receivedBody.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`))
+	}))
+	defer upstream.Close()
+
+	// 内联 setup：group.Name=alias(客户端请求模型)，item.ModelName=claude-3-5-sonnet(上游模型)。
+	if dbpkg.GetDB() != nil {
+		_ = dbpkg.Close()
+	}
+	if err := dbpkg.InitDB("sqlite", filepath.Join(t.TempDir(), "pt.db"), false); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(func() { _ = dbpkg.Close() })
+	ctx := context.Background()
+	ch := &model.Channel{
+		Name:     "pt-channel",
+		Type:     outbound.OutboundTypeAnthropic,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: upstream.URL}},
+		Model:    "claude-3-5-sonnet",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+	}
+	if err := op.ChannelCreate(ch, ctx); err != nil {
+		t.Fatalf("ChannelCreate: %v", err)
+	}
+	if err := op.GroupCreate(&model.Group{
+		Name:  "alias",
+		Mode:  model.GroupModeRoundRobin,
+		Items: []model.GroupItem{{ChannelID: ch.ID, ModelName: "claude-3-5-sonnet", Weight: 1}},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate: %v", err)
+	}
+
+	// model 字段在最后，用于验证字节稳定（除 model 外其余字节不变）。
+	clientBody := `{"max_tokens":100,"messages":[{"role":"user","content":"hi"}],"model":"alias"}`
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/messages", clientBody)
+	TextHandler(llm.APIFormatAnthropicMessage, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	got, _ := receivedBody.Load().(string)
+	want := `{"max_tokens":100,"messages":[{"role":"user","content":"hi"}],"model":"claude-3-5-sonnet"}`
+	if got != want {
+		t.Fatalf("upstream body mismatch:\n got=%s\nwant=%s", got, want)
 	}
 }
 
