@@ -96,7 +96,7 @@ func TestCountableFailureExcludesClientRejections(t *testing.T) {
 			t.Fatalf("status %d must not count as a channel failure", code)
 		}
 	}
-	for _, code := range []int{0, 401, 403, 500, 503, 524} {
+	for _, code := range []int{0, 401, 403, 500, 503, 524, 529} {
 		if !CountableFailure(code) {
 			t.Fatalf("status %d must count as a channel failure", code)
 		}

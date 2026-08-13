@@ -2173,3 +2173,176 @@ func TestHandlerFailedDetailTruncated(t *testing.T) {
 		t.Fatalf("response_body not truncated: %d bytes", len(found.Attempts[0].ResponseBody))
 	}
 }
+
+// 529（Anthropic overloaded）应触发网关内 failover：第一个渠道失败后切换到
+// 健康渠道，客户端最终拿到成功响应，而不是上游的 529 错误。
+func TestHandler529FailsOverToHealthyChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := setupRelayTestDB(t)
+
+	var overloadedHits atomic.Int32
+	overloadedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		overloadedHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(529)
+		_, _ = w.Write([]byte(`{"error":{"type":"overloaded_error","message":"claude-sonnet-5[1m] is temporarily unavailable"}}`))
+	}))
+	defer overloadedServer.Close()
+
+	var healthyHits atomic.Int32
+	healthyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		healthyHits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"id":"ok","object":"chat.completion.chunk","created":1,"model":"target-model","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}
+
+data: [DONE]
+
+`))
+	}))
+	defer healthyServer.Close()
+
+	overloadedChannel := &model.Channel{
+		Name:     "relay-529-overloaded",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: overloadedServer.URL + "/v1"}},
+		Model:    "target-model",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "overloaded-key"}},
+	}
+	if err := op.ChannelCreate(overloadedChannel, ctx); err != nil {
+		t.Fatalf("ChannelCreate overloaded channel failed: %v", err)
+	}
+	healthyChannel := &model.Channel{
+		Name:     "relay-529-healthy",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: healthyServer.URL + "/v1"}},
+		Model:    "target-model",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "healthy-key"}},
+	}
+	if err := op.ChannelCreate(healthyChannel, ctx); err != nil {
+		t.Fatalf("ChannelCreate healthy channel failed: %v", err)
+	}
+
+	group := &model.Group{
+		Name:            "relay-529-group",
+		Mode:            model.GroupModeFailover,
+		FirstTokenTimeOut: 0,
+	}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: overloadedChannel.ID, ModelName: "target-model", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd overloaded item failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: healthyChannel.ID, ModelName: "target-model", Priority: 2, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd healthy item failed: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"relay-529-group","messages":[{"role":"user","content":"hello"}],"stream":true}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	Handler(inbound.InboundTypeOpenAIChat, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected relay handler to succeed via healthy channel, got status %d body %s", recorder.Code, recorder.Body.String())
+	}
+	if overloadedHits.Load() != 1 {
+		t.Fatalf("expected overloaded channel hit exactly once, got %d", overloadedHits.Load())
+	}
+	if healthyHits.Load() != 1 {
+		t.Fatalf("expected healthy channel hit exactly once, got %d", healthyHits.Load())
+	}
+	if strings.Contains(recorder.Body.String(), "temporarily unavailable") {
+		t.Fatalf("upstream 529 error leaked to client: %s", recorder.Body.String())
+	}
+}
+
+// 529 失败应计入 AutoRank 失败样本（Auto 模式分组），让调度器能学习
+// "该候选当前不可用"并将其排到健康候选之后。
+func TestHandler529RecordsAutoRankFailureSample(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := setupRelayTestDB(t)
+	balancer.AutoRankReset()
+	t.Cleanup(balancer.AutoRankReset)
+
+	if err := op.SettingSetString(model.SettingKeyAutoRankEnabled, "true"); err != nil {
+		t.Fatalf("enable auto rank failed: %v", err)
+	}
+	t.Cleanup(func() { _ = op.SettingSetString(model.SettingKeyAutoRankEnabled, "false") })
+
+	var overloadedHits atomic.Int32
+	overloadedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		overloadedHits.Add(1)
+		w.WriteHeader(529)
+		_, _ = w.Write([]byte(`{"error":{"type":"overloaded_error","message":"temporarily unavailable"}}`))
+	}))
+	defer overloadedServer.Close()
+
+	var healthyHits atomic.Int32
+	healthyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		healthyHits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"id":"ok","object":"chat.completion.chunk","created":1,"model":"target-model","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}
+
+data: [DONE]
+
+`))
+	}))
+	defer healthyServer.Close()
+
+	overloadedChannel := &model.Channel{
+		Name:     "relay-529-sample-overloaded",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: overloadedServer.URL + "/v1"}},
+		Model:    "target-model",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "overloaded-key"}},
+	}
+	if err := op.ChannelCreate(overloadedChannel, ctx); err != nil {
+		t.Fatalf("ChannelCreate overloaded channel failed: %v", err)
+	}
+	healthyChannel := &model.Channel{
+		Name:     "relay-529-sample-healthy",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: healthyServer.URL + "/v1"}},
+		Model:    "target-model",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "healthy-key"}},
+	}
+	if err := op.ChannelCreate(healthyChannel, ctx); err != nil {
+		t.Fatalf("ChannelCreate healthy channel failed: %v", err)
+	}
+
+	group := &model.Group{Name: "relay-529-sample-group", Mode: model.GroupModeAuto}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: overloadedChannel.ID, ModelName: "target-model", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd overloaded item failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: healthyChannel.ID, ModelName: "target-model", Priority: 2, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd healthy item failed: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"relay-529-sample-group","messages":[{"role":"user","content":"hello"}],"stream":true}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	Handler(inbound.InboundTypeOpenAIChat, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected relay handler to succeed via healthy channel, got status %d body %s", recorder.Code, recorder.Body.String())
+	}
+	stats := balancer.GetAutoRankStatsForGroup(group.ID, overloadedChannel.ID, "target-model")
+	if stats.Samples == 0 || stats.Failures == 0 {
+		t.Fatalf("expected 529 failure recorded as auto rank sample, got %+v", stats)
+	}
+	healthyStats := balancer.GetAutoRankStatsForGroup(group.ID, healthyChannel.ID, "target-model")
+	if healthyStats.Samples == 0 || healthyStats.Failures > 0 {
+		t.Fatalf("expected healthy channel success sample, got %+v", healthyStats)
+	}
+}

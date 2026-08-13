@@ -67,10 +67,11 @@ func resetCircuitBreakerByChannel(channelID int) {
 
 // IsChannelLevelFailure 判断失败是否为渠道级信号（渠道服务/网络问题）。
 // 排除 Key 级认证(401/402/403/405)、限流(429)、客户端噪音与配额类。
+// 529（Anthropic overloaded）与 503 同属上游容量/可用性问题，计入渠道级。
 // 该判定用于渠道级冷却触发，与 AutoRank 可计数失败集合基本一致但不含 Key 级。
 func IsChannelLevelFailure(statusCode int) bool {
 	switch statusCode {
-	case 0, 500, 502, 503, 504, 520, 521, 524, 597, 598, 599:
+	case 0, 500, 502, 503, 504, 520, 521, 524, 529, 597, 598, 599:
 		return true
 	default:
 		return false

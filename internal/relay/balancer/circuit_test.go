@@ -40,7 +40,7 @@ func TestResetCircuitBreakerByChannelRemovesOnlyTargetChannel(t *testing.T) {
 
 // 渠道级失败信号分类：渠道服务/网络问题计入，Key 级/限流/客户端噪音不计
 func TestIsChannelLevelFailure(t *testing.T) {
-	channelLevel := []int{0, 500, 502, 503, 504, 520, 521, 524, 597, 598, 599}
+	channelLevel := []int{0, 500, 502, 503, 504, 520, 521, 524, 529, 597, 598, 599}
 	notChannel := []int{400, 401, 402, 403, 404, 405, 408, 415, 422, 429, 499, 596}
 	for _, code := range channelLevel {
 		if !IsChannelLevelFailure(code) {

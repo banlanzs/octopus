@@ -832,13 +832,13 @@ func autoRankLessScored(aC int, a AutoRankStats, bC int, b AutoRankStats, median
 //   - 配额类(596)：不计（不反映渠道质量）
 //
 // 纳入：连接错误(0)、Key 级认证(401/402/403/405)、渠道级 5xx(500/502/503/504)、
-// Cloudflare(520/521/524)、流式异常(597/598/599)。
+// Anthropic 过载(529)、Cloudflare(520/521/524)、流式异常(597/598/599)。
 //
 // 数据面（relay 转发）与控制面（主动探测任务）共用此表：探测被站点以 400
 // 拒绝（不接受无业务意图请求）时不该被记为渠道不健康。
 func CountableFailure(statusCode int) bool {
 	switch statusCode {
-	case 0, 401, 402, 403, 405, 500, 502, 503, 504, 520, 521, 524, 597, 598, 599:
+	case 0, 401, 402, 403, 405, 500, 502, 503, 504, 520, 521, 524, 529, 597, 598, 599:
 		return true
 	default:
 		return false
