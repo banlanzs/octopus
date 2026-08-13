@@ -11,6 +11,7 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/safe"
+	"github.com/looplj/axonhub/llm"
 )
 
 func detectRouteMismatchTarget(inboundType inbound.InboundType, err error) (model.SiteModelRouteType, bool) {
@@ -30,11 +31,42 @@ func detectRouteMismatchTarget(inboundType inbound.InboundType, err error) (mode
 	}
 }
 
+// detectRouteMismatchTargetAxon 是文本迁移路径（llm.APIFormat）的等价实现。
+func detectRouteMismatchTargetAxon(format llm.APIFormat, err error) (model.SiteModelRouteType, bool) {
+	if err == nil {
+		return "", false
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "/messages") || strings.Contains(message, "anthropic-version"):
+		return model.SiteModelRouteTypeAnthropic, true
+	case strings.Contains(message, "/responses") || strings.Contains(message, "responses api"):
+		return model.SiteModelRouteTypeOpenAIResponse, true
+	case strings.Contains(message, "text/event-stream") && format == llm.APIFormatOpenAIChatCompletion:
+		return model.SiteModelRouteTypeOpenAIResponse, true
+	default:
+		return "", false
+	}
+}
+
 func maybeLearnManagedRoute(ctx context.Context, channelID int, modelName string, inboundType inbound.InboundType, err error) {
 	targetRouteType, ok := detectRouteMismatchTarget(inboundType, err)
 	if !ok || strings.TrimSpace(modelName) == "" {
 		return
 	}
+	learnManagedRouteForTarget(ctx, channelID, modelName, targetRouteType, err)
+}
+
+// maybeLearnManagedRouteAxon 是文本迁移路径（llm.APIFormat）的等价实现。
+func maybeLearnManagedRouteAxon(ctx context.Context, channelID int, modelName string, format llm.APIFormat, err error) {
+	targetRouteType, ok := detectRouteMismatchTargetAxon(format, err)
+	if !ok || strings.TrimSpace(modelName) == "" {
+		return
+	}
+	learnManagedRouteForTarget(ctx, channelID, modelName, targetRouteType, err)
+}
+
+func learnManagedRouteForTarget(ctx context.Context, channelID int, modelName string, targetRouteType model.SiteModelRouteType, err error) {
 	binding, bindingErr := op.SiteChannelBindingGetByChannelID(channelID, ctx)
 	if bindingErr != nil || binding == nil {
 		return

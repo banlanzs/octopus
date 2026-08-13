@@ -8,6 +8,7 @@ import (
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/utils/log"
+	"github.com/looplj/axonhub/llm"
 )
 
 // ---- 质量失败检测（成功但输出异常）----
@@ -85,6 +86,37 @@ func isQualityFailureResponse(internalRequest *transformerModel.InternalLLMReque
 		}
 	}
 	return hasToolLoop
+}
+
+// isQualityFailureResponseAxon 是文本迁移路径（llm.Request）的等价实现：
+// 工具循环 + 短输出判定逻辑与 isQualityFailureResponse 一致，仅领域类型不同。
+func isQualityFailureResponseAxon(req *llm.Request, outputTokens int64) bool {
+	if req == nil || !qualityFailEnabled() {
+		return false
+	}
+	minOutput := qualityFailMinOutput()
+	if minOutput <= 0 || outputTokens >= minOutput {
+		return false
+	}
+	// 排除 guardrail 等小 max_tokens 请求（正常短输出）；兼容 max_completion_tokens。
+	mt := req.MaxTokens
+	if mt == nil {
+		mt = req.MaxCompletionTokens
+	}
+	if mt == nil || *mt < qualityFailMinMaxTokens() {
+		return false
+	}
+	// 工具循环上下文：请求带 tools 且历史含 tool 消息或 tool_calls。
+	if len(req.Tools) == 0 {
+		return false
+	}
+	for i := range req.Messages {
+		m := &req.Messages[i]
+		if m.Role == "tool" || len(m.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // recordQualityFailure 执行质量失败惩罚：key 级冷却 + AutoRank 失败样本。

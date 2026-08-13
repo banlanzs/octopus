@@ -152,6 +152,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		httpResp, err := httpClient.Do(ctx, outReq)
 		if err != nil {
 			span.End(dbmodel.AttemptFailed, 0, err.Error())
+			maybeLearnManagedRouteAxon(ctx, channel.ID, item.ModelName, format, err)
 			lastErr = err
 			continue
 		}
@@ -160,6 +161,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		llmResp, err := outAdapter.TransformResponse(ctx, httpResp)
 		if err != nil {
 			span.End(dbmodel.AttemptFailed, 0, err.Error())
+			maybeLearnManagedRouteAxon(ctx, channel.ID, item.ModelName, format, err)
 			lastErr = err
 			continue
 		}
@@ -172,6 +174,14 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 
 		span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
 		metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
+
+		// 质量失败检测（工具循环短输出）：与现有 relay 语义一致。
+		if llmResp.Usage != nil {
+			if outputTokens := llmResp.Usage.CompletionTokens; isQualityFailureResponseAxon(llmReq, outputTokens) {
+				recordQualityFailure(group, channel.ID, usedKey.ID, item.ModelName, outputTokens, span.Duration().Milliseconds(), 0)
+			}
+		}
+
 		metrics.Save(ctx, true, nil, iter.Attempts())
 		writeAxonResponse(c, outResp)
 		return
