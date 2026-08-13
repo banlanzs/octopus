@@ -13,6 +13,7 @@ docs/
 CONTEXT.md
 .impeccable.md
 MEMORY.md
+.mcp.json
 
 # Temporary go test logs
 .gotest*.log
