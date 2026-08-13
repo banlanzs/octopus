@@ -55,6 +55,8 @@ Download the binary for your platform from [Releases](https://github.com/banlanz
 ./octopus start
 ```
 
+> 💡 **Double-click launch on Windows**: You can also double-click `octopus-windows-*.exe` to start the service (equivalent to `octopus.exe start`); logs are shown in the console window that opens. If startup fails (e.g. port already in use), the window stays open with the error message — press Enter to close it. **Note: closing the window terminates the service directly**; press `Ctrl+C` inside the window for a graceful shutdown.
+
 ### 🛠️ Build from Source
 
 **Requirements:**

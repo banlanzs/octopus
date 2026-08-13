@@ -55,6 +55,8 @@ docker compose up -d
 ./octopus start
 ```
 
+> 💡 **Windows 双击启动**：Windows 下也可以直接双击 `octopus-windows-*.exe` 启动服务（等效于 `octopus.exe start`），会在弹出的控制台窗口中显示运行日志。若启动失败（如端口被占用），窗口会保留错误信息，按回车键关闭。**注意：关闭窗口会直接终止服务**，如需优雅退出请在窗口内按 `Ctrl+C`。
+
 ### 🛠️ 源码运行
 
 **环境要求：**

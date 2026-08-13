@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/conf"
@@ -42,14 +41,14 @@ var startCmd = &cobra.Command{
 		shutdown.Init(log.Logger)
 		if err := db.InitDB(conf.AppConfig.Database.Type, conf.AppConfig.Database.Path, conf.IsDebug()); err != nil {
 			log.Errorf("database init error: %v", err)
-			os.Exit(1)
+			exitWithPause(1)
 		}
 		shutdown.Register(db.Close)
 
 		if err := op.InitCache(); err != nil {
 			log.Errorf("cache init error: %v", err)
 			shutdown.Shutdown()
-			os.Exit(1)
+			exitWithPause(1)
 		}
 		relay.InitAutoRank(cmd.Context())
 		relayLogWriterCtx, stopRelayLogWriter := context.WithCancel(context.Background())
@@ -64,13 +63,13 @@ var startCmd = &cobra.Command{
 		if err := op.UserInit(); err != nil {
 			log.Errorf("user init error: %v", err)
 			shutdown.Shutdown()
-			os.Exit(1)
+			exitWithPause(1)
 		}
 
 		if err := server.Start(); err != nil {
 			log.Errorf("server start error: %v", err)
 			shutdown.Shutdown()
-			os.Exit(1)
+			exitWithPause(1)
 		}
 		shutdown.Register(server.Close)
 		shutdown.Register(func() error {
