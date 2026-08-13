@@ -287,11 +287,87 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		updates.PriceMultiplier = *req.PriceMultiplier
 	}
 
+	// 计算被删除的模型（级联清理前）
+	var removedModels []string
+	if req.Model != nil || req.CustomModel != nil {
+		newModelStr := existingChannel.Model
+		newCustomModelStr := existingChannel.CustomModel
+		if req.Model != nil {
+			newModelStr = *req.Model
+		}
+		if req.CustomModel != nil {
+			newCustomModelStr = *req.CustomModel
+		}
+
+		oldModels := make(map[string]bool)
+		for _, m := range xstrings.SplitTrimCompact(",", existingChannel.Model, existingChannel.CustomModel) {
+			oldModels[m] = true
+		}
+		newModels := make(map[string]bool)
+		for _, m := range xstrings.SplitTrimCompact(",", newModelStr, newCustomModelStr) {
+			newModels[m] = true
+		}
+		for old := range oldModels {
+			if !newModels[old] {
+				removedModels = append(removedModels, old)
+			}
+		}
+	}
+
 	// 只有当有字段需要更新时才执行 UPDATE
 	if len(selectFields) > 0 {
 		if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Select(selectFields).Updates(&updates).Error; err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("failed to update channel: %w", err)
+		}
+	}
+
+	// 级联删除分组内对已删模型的引用
+	var cascadeAffectedGroupIDs []int
+	if len(removedModels) > 0 {
+		if err := tx.Model(&model.GroupItem{}).
+			Where("channel_id = ? AND model_name IN ?", req.ID, removedModels).
+			Pluck("group_id", &cascadeAffectedGroupIDs).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to find groups referencing removed models: %w", err)
+		}
+		if err := tx.Where("channel_id = ? AND model_name IN ?", req.ID, removedModels).
+			Delete(&model.GroupItem{}).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to cascade delete group items: %w", err)
+		}
+
+		// 同步清理分组预设快照中的引用
+		var presets []model.GroupPreset
+		if err := tx.Find(&presets).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to load group presets for cascade: %w", err)
+		}
+		for _, preset := range presets {
+			originalLen := len(preset.Items)
+			filtered := make([]model.GroupPresetItem, 0, originalLen)
+			for _, item := range preset.Items {
+				if item.ChannelID == req.ID {
+					keep := true
+					for _, rm := range removedModels {
+						if item.ModelName == rm {
+							keep = false
+							break
+						}
+					}
+					if !keep {
+						continue
+					}
+				}
+				filtered = append(filtered, item)
+			}
+			if len(filtered) < originalLen {
+				preset.Items = filtered
+				if err := tx.Save(&preset).Error; err != nil {
+					tx.Rollback()
+					return nil, fmt.Errorf("failed to cascade update group preset %d: %w", preset.ID, err)
+				}
+			}
 		}
 	}
 
@@ -352,6 +428,13 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	// 刷新缓存并返回最新数据
 	if err := channelRefreshCacheByID(req.ID, ctx); err != nil {
 		return nil, err
+	}
+
+	// 刷新受级联删除影响的分组缓存
+	for _, groupID := range cascadeAffectedGroupIDs {
+		if err := groupRefreshCacheByID(groupID, ctx); err != nil {
+			log.Warnf("failed to refresh group cache for group %d after channel model removal: %v", groupID, err)
+		}
 	}
 
 	channel, _ := channelCache.Get(req.ID)
