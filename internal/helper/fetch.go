@@ -26,6 +26,16 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 		fetchModel, err = fetchAnthropicModels(client, ctx, request)
 	case outbound.OutboundTypeGemini:
 		fetchModel, err = fetchGeminiModels(client, ctx, request)
+	case outbound.OutboundTypeAuto:
+		// auto 渠道不声明协议：按 OpenAI → Anthropic → Gemini 依次尝试，
+		// 第一个成功的端点即视为该上游支持的协议。
+		fetchModel, err = fetchOpenAIModels(client, ctx, request)
+		if err != nil {
+			fetchModel, err = fetchAnthropicModels(client, ctx, request)
+		}
+		if err != nil {
+			fetchModel, err = fetchGeminiModels(client, ctx, request)
+		}
 	default:
 		fetchModel, err = fetchOpenAIModels(client, ctx, request)
 	}

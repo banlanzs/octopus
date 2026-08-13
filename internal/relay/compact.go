@@ -231,6 +231,9 @@ func supportsResponsesCompact(channelType outbound.OutboundType) bool {
 	switch channelType {
 	case outbound.OutboundTypeOpenAIResponse:
 		return true
+	case outbound.OutboundTypeAuto:
+		// auto 渠道在 /responses/compact 路由上按客户端协议解析为 OpenAIResponse
+		return true
 	default:
 		return false
 	}

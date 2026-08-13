@@ -202,13 +202,20 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
 			continue
 		}
+		// 协议自动检测：auto 渠道按客户端请求协议解析实际出站协议；
+		// 非 auto 渠道原样返回（权威声明）。无法解析则跳过该渠道。
+		resolvedType, ok := outbound.ResolveOutboundType(channel.Type, internalRequest.RawAPIFormat)
+		if !ok {
+			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type for auto detection: %d", channel.Type))
+			continue
+		}
 		// 渠道级熔断：整渠道熔断时跳过（粒度高于 key 级熔断，渠道整体故障快速摘除）
 		if tripped, remaining := balancer.IsChannelTripped(channel.ID); tripped {
 			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("channel circuit breaker tripped, remaining cooldown: %ds", int(remaining.Seconds())))
 			continue
 		}
 		if responsesPassthroughRequired {
-			if channel.Type == outbound.OutboundTypeOpenAIResponse {
+			if resolvedType == outbound.OutboundTypeOpenAIResponse {
 				responsesPassthroughCapableFound = true
 			} else {
 				iter.Skip(channel.ID, 0, channel.Name, "openai responses passthrough required")
@@ -217,18 +224,18 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		}
 
 		// 出站适配器
-		outAdapter := outbound.Get(channel.Type)
+		outAdapter := outbound.Get(resolvedType)
 		if outAdapter == nil {
 			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type: %d", channel.Type))
 			continue
 		}
 
-		// 类型兼容性检查
-		if internalRequest.IsEmbeddingRequest() && !outbound.IsEmbeddingChannelType(channel.Type) {
+		// 类型兼容性检查（auto 渠道按解析后的实际协议校验）
+		if internalRequest.IsEmbeddingRequest() && !outbound.IsEmbeddingChannelType(resolvedType) {
 			iter.Skip(channel.ID, 0, channel.Name, "channel type not compatible with embedding request")
 			continue
 		}
-		if internalRequest.IsChatRequest() && !outbound.IsChatChannelType(channel.Type) {
+		if internalRequest.IsChatRequest() && !outbound.IsChatChannelType(resolvedType) {
 			iter.Skip(channel.ID, 0, channel.Name, "channel type not compatible with chat request")
 			continue
 		}
@@ -287,13 +294,14 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 				}
 
 				// 重建 outAdapter 以重置流式状态（toolIndex, toolCalls 等）
-				outAdapter = outbound.Get(channel.Type)
+				outAdapter = outbound.Get(resolvedType)
 			}
 
 			// 构造尝试级上下文
 			ra := &relayAttempt{
 				relayRequest:         req,
 				outAdapter:           outAdapter,
+				resolvedType:         resolvedType,
 				channel:              channel,
 				usedKey:              usedKey,
 				firstTokenTimeOutSec: group.FirstTokenTimeOut,
@@ -515,7 +523,8 @@ func filterPassthroughCapableItems(items []dbmodel.GroupItem, ctx context.Contex
 	out := make([]dbmodel.GroupItem, 0, len(items))
 	for _, it := range items {
 		ch, err := op.ChannelGet(it.ChannelID, ctx)
-		if err != nil || !ch.Enabled || ch.Type != outbound.OutboundTypeOpenAIResponse {
+		// auto 渠道按请求协议解析（responses 请求 → OpenAIResponse），视为可直通候选
+		if err != nil || !ch.Enabled || (ch.Type != outbound.OutboundTypeOpenAIResponse && !outbound.IsAutoType(ch.Type)) {
 			continue
 		}
 		out = append(out, it)
@@ -532,12 +541,17 @@ func (req *relayRequest) fallbackAttempt(item dbmodel.GroupItem, group dbmodel.G
 	if err != nil || !channel.Enabled {
 		return attemptResult{}, false
 	}
-	outAdapter := outbound.Get(channel.Type)
+	// 协议自动检测：兜底探测同样解析 auto 渠道的实际协议。
+	resolvedType, ok := outbound.ResolveOutboundType(channel.Type, req.internalRequest.RawAPIFormat)
+	if !ok {
+		return attemptResult{}, false
+	}
+	outAdapter := outbound.Get(resolvedType)
 	if outAdapter == nil {
 		return attemptResult{}, false
 	}
 	// OpenAI Responses 原生能力约束：兜底探测同样只允许 OpenAI Response 渠道
-	if req.responsesPassthroughRequired && channel.Type != outbound.OutboundTypeOpenAIResponse {
+	if req.responsesPassthroughRequired && resolvedType != outbound.OutboundTypeOpenAIResponse {
 		return attemptResult{}, false
 	}
 	req.internalRequest.Model = item.ModelName
@@ -548,6 +562,7 @@ func (req *relayRequest) fallbackAttempt(item dbmodel.GroupItem, group dbmodel.G
 	ra := &relayAttempt{
 		relayRequest:         req,
 		outAdapter:           outAdapter,
+		resolvedType:         resolvedType,
 		channel:              channel,
 		usedKey:              usedKey,
 		firstTokenTimeOutSec: group.FirstTokenTimeOut,
@@ -712,7 +727,7 @@ func (ra *relayAttempt) forward() (int, error) {
 	ctx := ra.requestContext()
 
 	// 尝试上游 WebSocket（仅 OpenAI Response outbound 类型；必须是客户端 WS 入站且新开关显式启用）
-	if ra.channel.Type == outbound.OutboundTypeOpenAIResponse &&
+	if ra.resolvedType == outbound.OutboundTypeOpenAIResponse &&
 		ra.internalRequest.RawAPIFormat == model.APIFormatOpenAIResponse {
 
 		shouldTryWS := false
@@ -1034,7 +1049,7 @@ func (ra *relayAttempt) forwardViaHTTPPassthrough(ctx context.Context, pt model.
 
 	// Copy headers
 	ra.copyHeaders(outboundRequest)
-	if ra.channel.Type == outbound.OutboundTypeOpenAIResponse {
+	if ra.resolvedType == outbound.OutboundTypeOpenAIResponse {
 		outboundRequest.Header.Set("Content-Type", "application/json")
 	}
 	ra.recordAttemptOutboundHeaders(outboundRequest.Header)
@@ -1118,7 +1133,7 @@ func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error)
 
 	// 复制请求头
 	ra.copyHeaders(outboundRequest)
-	if ra.channel.Type == outbound.OutboundTypeOpenAIResponse {
+	if ra.resolvedType == outbound.OutboundTypeOpenAIResponse {
 		outboundRequest.Header.Set("Content-Type", "application/json")
 	}
 	ra.recordAttemptOutboundHeaders(outboundRequest.Header)

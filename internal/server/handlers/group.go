@@ -315,6 +315,8 @@ func outboundTypeLabel(t outbound.OutboundType) string {
 		return "volcengine"
 	case outbound.OutboundTypeOpenAIEmbedding:
 		return "embedding"
+	case outbound.OutboundTypeAuto:
+		return "auto"
 	default:
 		return "unknown"
 	}

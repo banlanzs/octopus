@@ -13,6 +13,7 @@ import (
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/transformer/model"
+	"github.com/bestruirui/octopus/internal/transformer/outbound"
 	"github.com/gin-gonic/gin"
 )
 
@@ -111,7 +112,10 @@ func (r *relayRequest) requestContext() context.Context {
 type relayAttempt struct {
 	*relayRequest // 嵌入请求级上下文
 
-	outAdapter           model.Outbound
+	outAdapter model.Outbound
+	// resolvedType 本次尝试实际使用的出站协议（auto 渠道按客户端请求协议解析，
+	// 非 auto 渠道等于 channel.Type）。所有渠道类型判断一律用它。
+	resolvedType         outbound.OutboundType
 	channel              *dbmodel.Channel
 	usedKey              dbmodel.ChannelKey
 	firstTokenTimeOutSec int

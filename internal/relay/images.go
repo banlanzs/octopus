@@ -155,8 +155,8 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 			continue
 		}
 
-		// channel.Type 限制：仅 OpenAI Chat/Responses
-		if channel.Type != outbound.OutboundTypeOpenAIChat && channel.Type != outbound.OutboundTypeOpenAIResponse {
+		// channel.Type 限制：仅 OpenAI Chat/Responses（auto 渠道按 OpenAI 格式处理）
+		if channel.Type != outbound.OutboundTypeOpenAIChat && channel.Type != outbound.OutboundTypeOpenAIResponse && !outbound.IsAutoType(channel.Type) {
 			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type: %d", channel.Type))
 			continue
 		}

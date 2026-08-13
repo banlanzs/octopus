@@ -86,6 +86,7 @@ export function ChannelForm({
         [ChannelType.Gemini]: 'baseUrlHintGemini',
         [ChannelType.Volcengine]: 'baseUrlHintVolcengine',
         [ChannelType.OpenAIEmbedding]: 'baseUrlHintOpenAIEmbedding',
+        [ChannelType.Auto]: 'baseUrlHintAuto',
     };
 
     // Ensure the form always shows at least 1 row for base_urls / keys / custom_header.
@@ -270,6 +271,7 @@ export function ChannelForm({
                             <SelectItem className='rounded-xl' value={String(ChannelType.Gemini)}>{t('typeGemini')}</SelectItem>
                             <SelectItem className='rounded-xl' value={String(ChannelType.Volcengine)}>{t('typeVolcengine')}</SelectItem>
                             <SelectItem className='rounded-xl' value={String(ChannelType.OpenAIEmbedding)}>{t('typeOpenAIEmbedding')}</SelectItem>
+                            <SelectItem className='rounded-xl' value={String(ChannelType.Auto)}>{t('typeAuto')}</SelectItem>
                         </SelectContent>
                     </Select>
                 </div>

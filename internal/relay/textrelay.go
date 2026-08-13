@@ -18,6 +18,7 @@ import (
 	"github.com/bestruirui/octopus/internal/relay/axonadapter"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/server/resp"
+	"github.com/bestruirui/octopus/internal/transformer/outbound"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
@@ -117,11 +118,28 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 			continue
 		}
 
-		channelType, ok := axonadapter.OutboundTypeToAPIFormat(channel.Type)
-		if !ok {
-			iter.Skip(channel.ID, usedKey.ID, channel.Name, fmt.Sprintf("unsupported channel type: %d", channel.Type))
-			lastErr = fmt.Errorf("unsupported channel type: %d", channel.Type)
-			continue
+		// === 协议自动检测：auto 渠道按客户端协议生成候选链 ===
+		// 客户端协议恒在首位（上游支持则按原逻辑透传/直通）；遇到「协议能力
+		// 缺失」（400 / 403-CF 拦截页 / 404 非模型不可用 / 405）时按固定链换
+		// 协议重试；responses/embedding 请求族为单候选，不做转换。非 auto
+		// 渠道候选只有声明的协议本身，行为与改造前完全一致。
+		autoChannel := outbound.IsAutoType(channel.Type)
+		clientProto := ""
+		var candidates []outbound.OutboundType
+		if autoChannel {
+			var ok bool
+			clientProto, ok = clientProtocolFromAxonFormat(format)
+			if !ok {
+				iter.Skip(channel.ID, 0, channel.Name, "unsupported client protocol for auto channel")
+				continue
+			}
+			candidates = protocolCandidates(channel.Type, clientProto, channel.ID, channel.GetBaseUrl())
+			if len(candidates) == 0 {
+				iter.Skip(channel.ID, 0, channel.Name, "protocol unsupported (cached)")
+				continue
+			}
+		} else {
+			candidates = []outbound.OutboundType{channel.Type}
 		}
 
 		// 同通道重试次数（与现有 relay 一致）。
@@ -136,43 +154,192 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		var lastSpan *balancer.AttemptSpan
 		var lastStatusCode int
 		var lastAttemptErr error
+		capabilityExhausted := false // 全部候选均为协议能力缺失（不记渠道失败）
+		channelFailed := false       // 已记录渠道级失败
 
-		for retryNum := 0; retryNum < maxRetries; retryNum++ {
-			if retryNum > 0 {
-				delay := computeBackoff(retryNum, 0)
-				select {
-				case <-ctx.Done():
-					metrics.Save(ctx, false, context.Canceled, iter.Attempts())
-					return
-				case <-time.After(delay):
+		for _, candidate := range candidates {
+			channelType, ok := axonadapter.OutboundTypeToAPIFormat(candidate)
+			if !ok {
+				if autoChannel {
+					capabilityExhausted = true
+					continue
 				}
-			}
-
-			// 每次重试重建 outAdapter，重置流式状态（toolIndex 等）。
-			outAdapter, err := axonadapter.NewOutbound(channelType, requestType, channel.GetBaseUrl(), usedKey.ChannelKey)
-			if err != nil {
-				lastAttemptErr = err
+				iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type: %d", channel.Type))
+				lastErr = fmt.Errorf("unsupported channel type: %d", channel.Type)
+				channelFailed = true
 				break
 			}
+			if autoChannel {
+				log.Infof("auto protocol candidate: channel=%s client=%s candidate=%s", channel.Name, clientProto, channelType)
+			}
 
-			isStream := llmReq.Stream != nil && *llmReq.Stream
+			capMissing := false // 当前候选命中协议能力缺失 → 换下一候选
+			for retryNum := 0; retryNum < maxRetries; retryNum++ {
+				if retryNum > 0 {
+					delay := computeBackoff(retryNum, 0)
+					select {
+					case <-ctx.Done():
+						metrics.Save(ctx, false, context.Canceled, iter.Attempts())
+						return
+					case <-time.After(delay):
+					}
+				}
 
-			// 同格式直通（anthropic → anthropic）：字节稳定转发保 prompt caching。
-			if isAnthropicPassthrough(format, channelType) {
-				span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
-				lastSpan = span
+				// 每次重试重建 outAdapter，重置流式状态（toolIndex 等）。
+				outAdapter, err := axonadapter.NewOutbound(channelType, requestType, channel.GetBaseUrl(), usedKey.ChannelKey)
+				if err != nil {
+					if autoChannel {
+						// 请求无法用该协议表示（等价 RequestTranslationError）：
+						// auto 模式视为该候选能力缺失，换下一协议。
+						lastAttemptErr = err
+						capMissing = true
+					} else {
+						lastAttemptErr = err
+					}
+					break
+				}
 
-				// 流式直通：SSE 字节透传 + sidecar 聚合 usage。
-				if isStream {
-					usage, perr := passthroughAnthropicStream(ctx, channel, usedKey, httpReq.Body, item.ModelName, c, inAdapter)
+				isStream := llmReq.Stream != nil && *llmReq.Stream
+
+				// 同格式直通（anthropic → anthropic）：字节稳定转发保 prompt caching。
+				if isAnthropicPassthrough(format, channelType) {
+					span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
+					lastSpan = span
+
+					// 流式直通：SSE 字节透传 + sidecar 聚合 usage。
+					if isStream {
+						usage, perr := passthroughAnthropicStream(ctx, channel, usedKey, httpReq.Body, item.ModelName, c, inAdapter)
+						if perr != nil {
+							sc := axonErrorStatusCode(perr)
+							if autoChannel {
+								// 非 2xx 在写响应前返回（写发生在 2xx 检查之后），可安全换协议。
+								if extracted := extractUpstreamStatusCode(perr); extracted != 0 {
+									sc = extracted
+								}
+								if ShouldFallbackProtocol(sc, perr.Error(), false) {
+									span.End(dbmodel.AttemptFailed, sc, perr.Error())
+									lastStatusCode = sc
+									lastAttemptErr = perr
+									capMissing = true
+									break
+								}
+							}
+							span.End(dbmodel.AttemptFailed, sc, perr.Error())
+							recordAxonAttemptFailure(channel, usedKey, span, sc)
+							lastStatusCode = sc
+							lastAttemptErr = perr
+							if !isRetryableStatus(sc) {
+								break
+							}
+							continue
+						}
+						span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
+						if usage != nil {
+							metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: item.ModelName}, item.ModelName, channel.ID)
+						} else {
+							metrics.ActualModel = item.ModelName
+						}
+						recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
+						if autoChannel {
+							rememberProtocolCapability(channel.ID, channel.GetBaseUrl(), clientProto, candidate)
+						}
+						metrics.Save(ctx, true, nil, iter.Attempts())
+						return
+					}
+
+					sc, llmResp, perr := passthroughAnthropicNonStream(ctx, channel, usedKey, httpReq.Body, item.ModelName, c, outAdapter)
 					if perr != nil {
-						sc := axonErrorStatusCode(perr)
+						if autoChannel && ShouldFallbackProtocol(sc, perr.Error(), false) {
+							span.End(dbmodel.AttemptFailed, sc, perr.Error())
+							lastStatusCode = sc
+							lastAttemptErr = perr
+							capMissing = true
+							break
+						}
 						span.End(dbmodel.AttemptFailed, sc, perr.Error())
 						recordAxonAttemptFailure(channel, usedKey, span, sc)
 						lastStatusCode = sc
 						lastAttemptErr = perr
 						if !isRetryableStatus(sc) {
 							break
+						}
+						continue
+					}
+					span.End(dbmodel.AttemptSuccess, sc, "")
+					if llmResp != nil {
+						metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
+					} else {
+						metrics.ActualModel = item.ModelName
+					}
+					recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, sc)
+					if llmResp != nil && llmResp.Usage != nil {
+						if outputTokens := llmResp.Usage.CompletionTokens; isQualityFailureResponseAxon(llmReq, outputTokens) {
+							recordQualityFailure(group, channel.ID, usedKey.ID, item.ModelName, outputTokens, span.Duration().Milliseconds(), 0)
+						}
+					}
+					if autoChannel {
+						rememberProtocolCapability(channel.ID, channel.GetBaseUrl(), clientProto, candidate)
+					}
+					metrics.Save(ctx, true, nil, iter.Attempts())
+					return
+				}
+
+				// 每次尝试都把统一请求的模型名改为本次候选的上游模型。
+				llmReq.Model = item.ModelName
+
+				outReq, err := outAdapter.TransformRequest(ctx, llmReq)
+				if err != nil {
+					if autoChannel {
+						// 请求无法用该协议表示：auto 模式视为该候选能力缺失。
+						lastAttemptErr = err
+						capMissing = true
+					} else {
+						lastAttemptErr = err
+					}
+					break
+				}
+				// 渠道级请求定制：参数覆盖（仅 JSON body）+ 自定义 header（敏感头保持转换器已写优先）。
+				applyAxonChannelOptions(channel, outReq)
+				// 火山（volcengine）渠道：在 responses outbound 之上补齐火山 Responses 特化。
+				if channelType == axonadapter.ChannelTypeDoubao {
+					applyVolcengineCompensation(outReq, llmReq)
+				}
+
+				nativeClient, err := helper.ChannelHTTPClientWithContext(ctx, channel)
+				if err != nil {
+					lastAttemptErr = err
+					break
+				}
+				httpClient := httpclient.NewHttpClientWithClient(nativeClient)
+
+				span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
+				lastSpan = span
+
+				// 流式：上游 SSE → 统一流 → 客户端格式流 → SSE 写回。
+				if llmReq.Stream != nil && *llmReq.Stream {
+					usage, ferr := forwardAxonStream(ctx, httpClient, outAdapter, inAdapter, outReq, c, time.Duration(group.FirstTokenTimeOut)*time.Second, streamHeartbeatInterval())
+					if ferr != nil {
+						sc := axonErrorStatusCode(ferr)
+						if autoChannel {
+							// 带状态码的错误来自 DoStream/TransformStream（写响应前）；
+							// 写响应后的错误（断流/取消）无状态码，不会命中能力缺失判定。
+							if extracted := extractUpstreamStatusCode(ferr); extracted != 0 {
+								sc = extracted
+							}
+							if ShouldFallbackProtocol(sc, ferr.Error(), false) {
+								span.End(dbmodel.AttemptFailed, sc, ferr.Error())
+								lastStatusCode = sc
+								lastAttemptErr = ferr
+								capMissing = true
+								break
+							}
+						}
+						span.End(dbmodel.AttemptFailed, sc, ferr.Error())
+						recordAxonAttemptFailure(channel, usedKey, span, sc)
+						lastStatusCode = sc
+						lastAttemptErr = ferr
+						if errors.Is(ferr, errAxonFirstTokenTimeout) || !isRetryableStatus(sc) {
+							break // 首 token 超时切换通道，不重试同一通道
 						}
 						continue
 					}
@@ -183,154 +350,121 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 						metrics.ActualModel = item.ModelName
 					}
 					recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
+					if autoChannel {
+						rememberProtocolCapability(channel.ID, channel.GetBaseUrl(), clientProto, candidate)
+					}
 					metrics.Save(ctx, true, nil, iter.Attempts())
 					return
 				}
 
-				sc, llmResp, perr := passthroughAnthropicNonStream(ctx, channel, usedKey, httpReq.Body, item.ModelName, c, outAdapter)
-				if perr != nil {
-					span.End(dbmodel.AttemptFailed, sc, perr.Error())
+				httpResp, err := httpClient.Do(ctx, outReq)
+				if err != nil {
+					sc := axonErrorStatusCode(err)
+					if autoChannel {
+						if extracted := extractUpstreamStatusCode(err); extracted != 0 {
+							sc = extracted
+						}
+						if ShouldFallbackProtocol(sc, err.Error(), false) {
+							span.End(dbmodel.AttemptFailed, sc, err.Error())
+							lastStatusCode = sc
+							lastAttemptErr = err
+							capMissing = true
+							break
+						}
+					}
+					span.End(dbmodel.AttemptFailed, sc, err.Error())
 					recordAxonAttemptFailure(channel, usedKey, span, sc)
 					lastStatusCode = sc
-					lastAttemptErr = perr
+					lastAttemptErr = err
 					if !isRetryableStatus(sc) {
 						break
 					}
 					continue
 				}
-				span.End(dbmodel.AttemptSuccess, sc, "")
-				if llmResp != nil {
-					metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
-				} else {
-					metrics.ActualModel = item.ModelName
+
+				// 上游响应 → 统一 llm.Response → 客户端格式。
+				llmResp, err := outAdapter.TransformResponse(ctx, httpResp)
+				if err != nil {
+					sc := axonErrorStatusCode(err)
+					if autoChannel {
+						if extracted := extractUpstreamStatusCode(err); extracted != 0 {
+							sc = extracted
+						}
+						if ShouldFallbackProtocol(sc, err.Error(), false) {
+							span.End(dbmodel.AttemptFailed, sc, err.Error())
+							lastStatusCode = sc
+							lastAttemptErr = err
+							capMissing = true
+							break
+						}
+					}
+					span.End(dbmodel.AttemptFailed, sc, err.Error())
+					recordAxonAttemptFailure(channel, usedKey, span, sc)
+					lastStatusCode = sc
+					lastAttemptErr = err
+					if !isRetryableStatus(sc) {
+						break
+					}
+					continue
 				}
-				recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, sc)
-				if llmResp != nil && llmResp.Usage != nil {
+				outResp, err := inAdapter.TransformResponse(ctx, llmResp)
+				if err != nil {
+					span.End(dbmodel.AttemptFailed, 0, err.Error())
+					recordAxonAttemptFailure(channel, usedKey, span, 0)
+					lastAttemptErr = err
+					break // 客户端格式转换错误不可重试
+				}
+
+				span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
+				metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
+
+				// 渠道健康闭环：成功样本 + 熔断/粘性/统计，随后质量检测（可能追加失败样本）。
+				recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
+
+				// 保存 responses 续传粘性（previous_response_id → 渠道）。
+				if format == llm.APIFormatOpenAIResponse && llmResp.ID != "" {
+					storeTextRelayReplaySticky(llmResp.ID, channel.ID, usedKey.ID)
+				}
+
+				// 质量失败检测（工具循环短输出）：与现有 relay 语义一致。
+				if llmResp.Usage != nil {
 					if outputTokens := llmResp.Usage.CompletionTokens; isQualityFailureResponseAxon(llmReq, outputTokens) {
 						recordQualityFailure(group, channel.ID, usedKey.ID, item.ModelName, outputTokens, span.Duration().Milliseconds(), 0)
 					}
 				}
+
+				if autoChannel {
+					rememberProtocolCapability(channel.ID, channel.GetBaseUrl(), clientProto, candidate)
+				}
 				metrics.Save(ctx, true, nil, iter.Attempts())
+				writeAxonResponse(c, outResp)
 				return
 			}
 
-			// 每次尝试都把统一请求的模型名改为本次候选的上游模型。
-			llmReq.Model = item.ModelName
+			if capMissing {
+				lastErr = lastAttemptErr
+				capabilityExhausted = true
+				continue // 换下一候选协议
+			}
 
-			outReq, err := outAdapter.TransformRequest(ctx, llmReq)
-			if err != nil {
-				lastAttemptErr = err
+			// 同通道重试耗尽（真实失败，非能力缺失）：一次性记录渠道级失败（熔断/AutoRank/outlier）。
+			if lastAttemptErr != nil {
+				if lastSpan != nil {
+					recordAxonChannelFailure(group, channel, usedKey, lastSpan, item.ModelName, lastStatusCode)
+				}
+				maybeLearnManagedRouteAxon(ctx, channel.ID, item.ModelName, format, lastAttemptErr)
+				lastErr = lastAttemptErr
+				channelFailed = true
 				break
 			}
-			// 渠道级请求定制：参数覆盖（仅 JSON body）+ 自定义 header（敏感头保持转换器已写优先）。
-			applyAxonChannelOptions(channel, outReq)
-			// 火山（volcengine）渠道：在 responses outbound 之上补齐火山 Responses 特化。
-			if channelType == axonadapter.ChannelTypeDoubao {
-				applyVolcengineCompensation(outReq, llmReq)
-			}
-
-			nativeClient, err := helper.ChannelHTTPClientWithContext(ctx, channel)
-			if err != nil {
-				lastAttemptErr = err
-				break
-			}
-			httpClient := httpclient.NewHttpClientWithClient(nativeClient)
-
-			span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
-			lastSpan = span
-
-			// 流式：上游 SSE → 统一流 → 客户端格式流 → SSE 写回。
-			if llmReq.Stream != nil && *llmReq.Stream {
-				usage, ferr := forwardAxonStream(ctx, httpClient, outAdapter, inAdapter, outReq, c, time.Duration(group.FirstTokenTimeOut)*time.Second, streamHeartbeatInterval())
-				if ferr != nil {
-					sc := axonErrorStatusCode(ferr)
-					span.End(dbmodel.AttemptFailed, sc, ferr.Error())
-					recordAxonAttemptFailure(channel, usedKey, span, sc)
-					lastStatusCode = sc
-					lastAttemptErr = ferr
-					if errors.Is(ferr, errAxonFirstTokenTimeout) || !isRetryableStatus(sc) {
-						break // 首 token 超时切换通道，不重试同一通道
-					}
-					continue
-				}
-				span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
-				if usage != nil {
-					metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: item.ModelName}, item.ModelName, channel.ID)
-				} else {
-					metrics.ActualModel = item.ModelName
-				}
-				recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
-				metrics.Save(ctx, true, nil, iter.Attempts())
-				return
-			}
-
-			httpResp, err := httpClient.Do(ctx, outReq)
-			if err != nil {
-				sc := axonErrorStatusCode(err)
-				span.End(dbmodel.AttemptFailed, sc, err.Error())
-				recordAxonAttemptFailure(channel, usedKey, span, sc)
-				lastStatusCode = sc
-				lastAttemptErr = err
-				if !isRetryableStatus(sc) {
-					break
-				}
-				continue
-			}
-
-			// 上游响应 → 统一 llm.Response → 客户端格式。
-			llmResp, err := outAdapter.TransformResponse(ctx, httpResp)
-			if err != nil {
-				sc := axonErrorStatusCode(err)
-				span.End(dbmodel.AttemptFailed, sc, err.Error())
-				recordAxonAttemptFailure(channel, usedKey, span, sc)
-				lastStatusCode = sc
-				lastAttemptErr = err
-				if !isRetryableStatus(sc) {
-					break
-				}
-				continue
-			}
-			outResp, err := inAdapter.TransformResponse(ctx, llmResp)
-			if err != nil {
-				span.End(dbmodel.AttemptFailed, 0, err.Error())
-				recordAxonAttemptFailure(channel, usedKey, span, 0)
-				lastAttemptErr = err
-				break // 客户端格式转换错误不可重试
-			}
-
-			span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
-			metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
-
-			// 渠道健康闭环：成功样本 + 熔断/粘性/统计，随后质量检测（可能追加失败样本）。
-			recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
-
-			// 保存 responses 续传粘性（previous_response_id → 渠道）。
-			if format == llm.APIFormatOpenAIResponse && llmResp.ID != "" {
-				storeTextRelayReplaySticky(llmResp.ID, channel.ID, usedKey.ID)
-			}
-
-			// 质量失败检测（工具循环短输出）：与现有 relay 语义一致。
-			if llmResp.Usage != nil {
-				if outputTokens := llmResp.Usage.CompletionTokens; isQualityFailureResponseAxon(llmReq, outputTokens) {
-					recordQualityFailure(group, channel.ID, usedKey.ID, item.ModelName, outputTokens, span.Duration().Milliseconds(), 0)
-				}
-			}
-
-			metrics.Save(ctx, true, nil, iter.Attempts())
-			writeAxonResponse(c, outResp)
-			return
 		}
 
-		// 同通道重试耗尽：一次性记录渠道级失败（熔断/AutoRank/outlier）。
-		if lastAttemptErr != nil {
-			if lastSpan != nil {
-				recordAxonChannelFailure(group, channel, usedKey, lastSpan, item.ModelName, lastStatusCode)
-			}
-			maybeLearnManagedRouteAxon(ctx, channel.ID, item.ModelName, format, lastAttemptErr)
-			lastErr = lastAttemptErr
+		// 全部候选均为协议能力缺失：记「不支持」哨兵（TTL 10 分钟后重新探测），
+		// 不记录渠道级失败/熔断/冷却（能力协商事件）。
+		if autoChannel && capabilityExhausted && !channelFailed {
+			rememberProtocolUnsupported(channel.ID, channel.GetBaseUrl(), clientProto)
 		}
 	}
-
 	if lastErr == nil {
 		lastErr = fmt.Errorf("all channels failed")
 	}

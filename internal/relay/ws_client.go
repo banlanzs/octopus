@@ -342,7 +342,8 @@ func bestEffortWarmupUpstreamWS(
 			lastErr = err
 			continue
 		}
-		if !channel.Enabled || channel.Type != outbound.OutboundTypeOpenAIResponse {
+		// auto 渠道在 WS 路由（responses 请求）上解析为 OpenAIResponse，视为可直通
+		if !channel.Enabled || (channel.Type != outbound.OutboundTypeOpenAIResponse && !outbound.IsAutoType(channel.Type)) {
 			continue
 		}
 

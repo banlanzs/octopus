@@ -14,6 +14,7 @@ export enum ChannelType {
     Gemini = 3,
     Volcengine = 4,
     OpenAIEmbedding = 5,
+    Auto = 6, // 自动检测：按客户端请求协议解析出站协议
 }
 
 /**

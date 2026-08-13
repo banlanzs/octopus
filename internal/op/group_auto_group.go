@@ -256,6 +256,8 @@ func channelEndpointType(channelType outboundmodel.OutboundType) string {
 		return string(model.SiteModelRouteTypeVolcengine)
 	case outboundmodel.OutboundTypeOpenAIEmbedding:
 		return string(model.SiteModelRouteTypeOpenAIEmbedding)
+	case outboundmodel.OutboundTypeAuto:
+		return "auto"
 	default:
 		return string(model.SiteModelRouteTypeOpenAIChat)
 	}

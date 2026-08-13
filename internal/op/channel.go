@@ -600,6 +600,8 @@ func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 			endpointType = "anthropic"
 		case model2.OutboundTypeGemini:
 			endpointType = "gemini"
+		case model2.OutboundTypeAuto:
+			endpointType = "auto"
 		}
 		var siteID *int
 		var siteAccountID *int

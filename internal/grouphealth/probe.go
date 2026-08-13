@@ -164,6 +164,7 @@ func buildProbeInternalRequest(channelType outbound.OutboundType, modelName stri
 			MaxTokens:    &one,
 		}
 	default:
+		// auto 渠道（OutboundTypeAuto）无固定协议，探测固定用 OpenAI chat 格式。
 		return &transformerModel.InternalLLMRequest{
 			Model:        modelName,
 			RawAPIFormat: transformerModel.APIFormatOpenAIChatCompletion,
