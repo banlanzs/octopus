@@ -57,12 +57,22 @@ func Start() error {
 
 	httpSrv.Addr = fmt.Sprintf("%s:%d", conf.AppConfig.Server.Host, conf.AppConfig.Server.Port)
 	httpSrv.Handler = r
+	listenErr := make(chan error, 1)
 	safe.Go("http-listen", func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Errorf("http server listen and serve error: %v", err)
+			listenErr <- err
 		}
 	})
-	return nil
+	// 捕获"立即返回"的启动错误（端口被占用等）：ListenAndServe 绑定失败会立刻
+	// 返回错误并通过 channel 传出，而成功时会阻塞在 accept 循环。用短超时窗口
+	// 区分两种情况，让启动失败能被 start.go 感知（双击场景下窗口保留错误信息）。
+	select {
+	case err := <-listenErr:
+		return fmt.Errorf("http server start failed: %w", err)
+	case <-time.After(500 * time.Millisecond):
+		return nil
+	}
 }
 
 func Close() error {
