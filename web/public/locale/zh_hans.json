@@ -940,6 +940,8 @@
             "reasoningEffort": "推理强度",
             "failedDetail": "失败详情",
             "failedResponseBody": "失败响应体",
+            "detailShowMore": "展开更多",
+            "detailShowLess": "收起",
             "exportCall": "导出调用日志"
         }
     },

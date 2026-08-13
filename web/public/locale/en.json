@@ -940,6 +940,8 @@
             "reasoningEffort": "Reasoning",
             "failedDetail": "Failed details",
             "failedResponseBody": "Failed response body",
+            "detailShowMore": "Show more",
+            "detailShowLess": "Show less",
             "exportCall": "Export call log"
         }
     },

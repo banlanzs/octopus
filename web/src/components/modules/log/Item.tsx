@@ -643,22 +643,48 @@ function AttemptDetailBlock({ attempt, log }: { attempt: MergedAttempt; log: Rel
                     {hasHeaders ? (
                         <div className="flex flex-col gap-0.5 min-w-0">
                             <span className="text-[10px] font-semibold text-muted-foreground">{t('requestHeaders')}</span>
-                            <pre className="max-h-40 overflow-auto rounded-lg bg-muted/50 p-2 text-[10px] font-mono whitespace-pre-wrap wrap-break-word">{attempt.outbound_headers}</pre>
+                            <TruncatedDetailPre text={attempt.outbound_headers ?? ''} />
                         </div>
                     ) : null}
                     {hasReq ? (
                         <div className="flex flex-col gap-0.5 min-w-0">
                             <span className="text-[10px] font-semibold text-muted-foreground">{t('requestBody')}</span>
-                            <pre className="max-h-40 overflow-auto rounded-lg bg-muted/50 p-2 text-[10px] font-mono whitespace-pre-wrap wrap-break-word">{attempt.request_body}</pre>
+                            <TruncatedDetailPre text={attempt.request_body ?? ''} />
                         </div>
                     ) : null}
                     {hasResp ? (
                         <div className="flex flex-col gap-0.5 min-w-0">
                             <span className="text-[10px] font-semibold text-muted-foreground">{t('failedResponseBody')}</span>
-                            <pre className="max-h-40 overflow-auto rounded-lg bg-muted/50 p-2 text-[10px] font-mono whitespace-pre-wrap wrap-break-word">{attempt.response_body}</pre>
+                            <TruncatedDetailPre text={attempt.response_body ?? ''} />
                         </div>
                     ) : null}
                 </div>
+            ) : null}
+        </div>
+    );
+}
+
+// detailPreMaxChars 失败详情文本默认展示的最大字符数。部分上游错误（如
+// Mistral 422）会回显完整请求内容，默认只显示开头，需手动展开查看全文。
+const detailPreMaxChars = 2000;
+
+function TruncatedDetailPre({ text }: { text: string }) {
+    const t = useTranslations('log.card');
+    const [expanded, setExpanded] = useState(false);
+    const needsTruncate = text.length > detailPreMaxChars;
+    const shown = needsTruncate && !expanded ? text.slice(0, detailPreMaxChars) + '\n...(truncated)' : text;
+    return (
+        <div className="flex flex-col gap-0.5">
+            <pre className="max-h-40 overflow-auto rounded-lg bg-muted/50 p-2 text-[10px] font-mono whitespace-pre-wrap wrap-break-word">{shown}</pre>
+            {needsTruncate ? (
+                <button
+                    type="button"
+                    onClick={() => setExpanded((v) => !v)}
+                    className="self-start flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-card-foreground hover:bg-muted/50 transition-colors"
+                >
+                    <ChevronDown className={cn('size-3 transition-transform', expanded && 'rotate-180')} />
+                    {expanded ? t('detailShowLess') : t('detailShowMore')}
+                </button>
             ) : null}
         </div>
     );

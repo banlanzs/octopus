@@ -1052,8 +1052,9 @@ func (ra *relayAttempt) forwardViaHTTPPassthrough(ctx context.Context, pt model.
 		body, _ := io.ReadAll(response.Body)
 		ra.recordAttemptResponseBody(body)
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
-		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
-		return statusCode, fmt.Errorf("upstream error: %d: %s", response.StatusCode, string(body))
+		bodyText := truncateBodyForMessage(body)
+		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, bodyText)
+		return statusCode, fmt.Errorf("upstream error: %d: %s", response.StatusCode, bodyText)
 	}
 
 	// Get passthrough config
@@ -1138,8 +1139,9 @@ func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error)
 		}
 		ra.recordAttemptResponseBody(body)
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
-		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
-		return statusCode, fmt.Errorf("upstream error: %d: %s", response.StatusCode, string(body))
+		bodyText := truncateBodyForMessage(body)
+		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, bodyText)
+		return statusCode, fmt.Errorf("upstream error: %d: %s", response.StatusCode, bodyText)
 	}
 
 	// 处理响应
@@ -1194,6 +1196,20 @@ func (ra *relayAttempt) getStreamWriter() StreamWriter {
 
 // maxFailedDetailBytes 是失败详情（请求体/响应体）记录的最大字节数，防止日志膨胀。
 const maxFailedDetailBytes = 128 * 1024
+
+// logBodyMaxBytes 是上游错误体写入日志与错误消息的最大长度。
+// 完整响应体已由 recordAttemptResponseBody 记入失败详情（供前端展开查看），
+// 日志单行与错误消息只保留开头——部分上游（如 Mistral 422）会回显整个
+// 请求内容，不截断会刷屏黑窗口与错误卡片。
+const logBodyMaxBytes = 1024
+
+// truncateBodyForMessage 截断上游响应体，用于日志打印与错误消息。
+func truncateBodyForMessage(body []byte) string {
+	if len(body) > logBodyMaxBytes {
+		return string(body[:logBodyMaxBytes]) + "...(truncated)"
+	}
+	return string(body)
+}
 
 // failedDetailEnabled 检查失败详情记录开关（relay_log_failed_detail_enabled）。
 func failedDetailEnabled() bool {
