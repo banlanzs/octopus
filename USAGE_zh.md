@@ -556,6 +556,6 @@ Octopus 支持 **OpenAI Chat / OpenAI Responses / Anthropic** 三种格式互相
 
 <div align="center">
 
-遇到本指南没覆盖的问题，欢迎到 [GitHub](https://github.com/Hureru/octopus) 提 Issue，或到 [LinuxDO 帖子](https://linux.do/t/topic/2160826) 交流。
+遇到本指南没覆盖的问题，欢迎到 [GitHub](https://github.com/banlanzs/octopus) 提 Issue，或到 [LinuxDO 帖子](https://linux.do/t/topic/2160826) 交流。
 
 </div>

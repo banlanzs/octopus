@@ -49,7 +49,7 @@ docker compose up -d
 
 ### 📦 Download from Release
 
-Download the binary for your platform from [Releases](https://github.com/Hureru/octopus/releases), then run:
+Download the binary for your platform from [Releases](https://github.com/banlanzs/octopus/releases), then run:
 
 ```bash
 ./octopus start
@@ -64,7 +64,7 @@ Download the binary for your platform from [Releases](https://github.com/Hureru/
 
 ```bash
 # Clone the repository
-git clone https://github.com/Hureru/octopus.git
+git clone https://github.com/banlanzs/octopus.git
 cd octopus
 # Build frontend
 cd web && pnpm install && pnpm run build && cd ..
@@ -400,15 +400,10 @@ Compatible with [bestruirui/octopus](https://github.com/bestruirui/octopus), ~18
 - Claude Opus 4.7 adaptive thinking; DB migrations 003–012; new Site Automation panel in Settings.
 
 > Full diff: `git log upstream/dev..HEAD` after adding `https://github.com/bestruirui/octopus` as `upstream`.
-
+`https://github.com/Hureru/octopus`
 ---
 
 ## 🤝 Acknowledgments
 
 - 🙏 [looplj/axonhub](https://github.com/looplj/axonhub) - The LLM API adaptation module in this project is directly derived from this repository
 - 📊 [sst/models.dev](https://github.com/sst/models.dev) - AI model database providing model pricing data
-
-## 🔗 Friend Links
-
-- 🐧 [LinuxDO](https://linux.do) - A community for tech enthusiasts
-

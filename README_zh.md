@@ -49,7 +49,7 @@ docker compose up -d
 
 ### 📦 从 Release 下载
 
-从 [Releases](https://github.com/Hureru/octopus/releases) 下载对应平台的二进制文件，然后运行：
+从 [Releases](https://github.com/banlanzs/octopus/releases) 下载对应平台的二进制文件，然后运行：
 
 ```bash
 ./octopus start
@@ -64,7 +64,7 @@ docker compose up -d
 
 ```bash
 # 克隆项目
-git clone https://github.com/Hureru/octopus.git
+git clone https://github.com/banlanzs/octopus.git
 cd octopus
 # 构建前端
 cd web && pnpm install && pnpm run build && cd ..
@@ -402,14 +402,10 @@ base_url = "http://127.0.0.1:8080/v1"
 - 支持 Claude Opus 4.7 adaptive thinking；DB 迁移 003–012；设置页新增 Site Automation 面板。
 
 > 完整 diff：添加上游远端 `https://github.com/bestruirui/octopus` 后执行 `git log upstream/dev..HEAD`。
-
+`https://github.com/Hureru/octopus`
 ---
 
 ## 🤝 致谢
 
 - 🙏 [looplj/axonhub](https://github.com/looplj/axonhub) - 本项目的 LLM API 适配模块直接源自该仓库的实现
 - 📊 [sst/models.dev](https://github.com/sst/models.dev) - AI 模型数据库，提供模型价格数据
-
-## 🔗 友链
-
-- 🐧 [LinuxDO](https://linux.do) - 真正的技术社区

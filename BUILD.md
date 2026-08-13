@@ -52,7 +52,7 @@ mv web/out static/
 CGO_ENABLED=0 go build -tags=jsoniter \
   -ldflags "-X 'github.com/bestruirui/octopus/internal/conf.Version=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)' \
             -X 'github.com/bestruirui/octopus/internal/conf.BuildTime=$(date +'%F %T %z')' \
-            -X 'github.com/bestruirui/octopus/internal/conf.Author=hureru' \
+            -X 'github.com/bestruirui/octopus/internal/conf.Author=banlanzs' \
             -X 'github.com/bestruirui/octopus/internal/conf.Commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)' \
             -s -w" \
   -o octopus-windows-amd64.exe .

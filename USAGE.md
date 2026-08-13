@@ -556,6 +556,6 @@ First confirm the **upstream provider itself** is configured correctly (the same
 
 <div align="center">
 
-For questions not covered in this guide, feel free to open an [Issue on GitHub](https://github.com/Hureru/octopus) or discuss on the [LinuxDO thread](https://linux.do/t/topic/2160826).
+For questions not covered in this guide, feel free to open an [Issue on GitHub](https://github.com/banlanzs/octopus) or discuss on the [LinuxDO thread](https://linux.do/t/topic/2160826).
 
 </div>

@@ -16,7 +16,7 @@ COMMIT_ID="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BUILD_TIME="$(date +'%F %T %z')"
 LDFLAGS="-X 'github.com/bestruirui/octopus/internal/conf.Version=${GIT_VERSION}' \
          -X 'github.com/bestruirui/octopus/internal/conf.BuildTime=${BUILD_TIME}' \
-         -X 'github.com/bestruirui/octopus/internal/conf.Author=hureru' \
+         -X 'github.com/bestruirui/octopus/internal/conf.Author=banlanzs' \
          -X 'github.com/bestruirui/octopus/internal/conf.Commit=${COMMIT_ID}' \
          -s -w"
 

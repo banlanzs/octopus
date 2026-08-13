@@ -67,7 +67,7 @@ function Build-Backend {
     $buildTime = Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'
     $ldflags = "-X 'github.com/bestruirui/octopus/internal/conf.Version=$gitVersion' " +
         "-X 'github.com/bestruirui/octopus/internal/conf.BuildTime=$buildTime' " +
-        "-X 'github.com/bestruirui/octopus/internal/conf.Author=hureru' " +
+        "-X 'github.com/bestruirui/octopus/internal/conf.Author=banlanzs' " +
         "-X 'github.com/bestruirui/octopus/internal/conf.Commit=$commitId' -s -w"
 
     Write-Host 'Building Go binary...'
