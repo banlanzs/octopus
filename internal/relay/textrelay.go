@@ -152,10 +152,36 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 
 			isStream := llmReq.Stream != nil && *llmReq.Stream
 
-			// 同格式直通（anthropic → anthropic，非流式）：字节稳定转发保 prompt caching。
-			if !isStream && isAnthropicPassthrough(format, channelType) {
+			// 同格式直通（anthropic → anthropic）：字节稳定转发保 prompt caching。
+			if isAnthropicPassthrough(format, channelType) {
 				span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
 				lastSpan = span
+
+				// 流式直通：SSE 字节透传 + sidecar 聚合 usage。
+				if isStream {
+					usage, perr := passthroughAnthropicStream(ctx, channel, usedKey, httpReq.Body, item.ModelName, c, inAdapter)
+					if perr != nil {
+						sc := axonErrorStatusCode(perr)
+						span.End(dbmodel.AttemptFailed, sc, perr.Error())
+						recordAxonAttemptFailure(channel, usedKey, span, sc)
+						lastStatusCode = sc
+						lastAttemptErr = perr
+						if !isRetryableStatus(sc) {
+							break
+						}
+						continue
+					}
+					span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
+					if usage != nil {
+						metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: item.ModelName}, item.ModelName, channel.ID)
+					} else {
+						metrics.ActualModel = item.ModelName
+					}
+					recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
+					metrics.Save(ctx, true, nil, iter.Attempts())
+					return
+				}
+
 				sc, llmResp, perr := passthroughAnthropicNonStream(ctx, channel, usedKey, httpReq.Body, item.ModelName, c, outAdapter)
 				if perr != nil {
 					span.End(dbmodel.AttemptFailed, sc, perr.Error())

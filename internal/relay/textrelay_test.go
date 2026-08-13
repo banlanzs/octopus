@@ -586,6 +586,69 @@ func TestDetectRouteMismatchTargetAxon(t *testing.T) {
 	}
 }
 
+func TestTextHandlerAnthropicPassthroughStream(t *testing.T) {
+	var receivedBody atomic.Value
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		receivedBody.Store(string(body))
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"role\":\"assistant\",\"content\":[]}}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	// 内联 setup：group.Name=alias(客户端)，item.ModelName=claude-3-5-sonnet(上游)。
+	if dbpkg.GetDB() != nil {
+		_ = dbpkg.Close()
+	}
+	if err := dbpkg.InitDB("sqlite", filepath.Join(t.TempDir(), "pt-stream.db"), false); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(func() { _ = dbpkg.Close() })
+	ctx := context.Background()
+	ch := &model.Channel{
+		Name: "pt-stream-channel", Type: outbound.OutboundTypeAnthropic, Enabled: true,
+		BaseUrls: []model.BaseUrl{{URL: upstream.URL}}, Model: "claude-3-5-sonnet",
+		Keys: []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+	}
+	if err := op.ChannelCreate(ch, ctx); err != nil {
+		t.Fatalf("ChannelCreate: %v", err)
+	}
+	if err := op.GroupCreate(&model.Group{
+		Name:  "alias",
+		Mode:  model.GroupModeRoundRobin,
+		Items: []model.GroupItem{{ChannelID: ch.ID, ModelName: "claude-3-5-sonnet", Weight: 1}},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate: %v", err)
+	}
+
+	// model 在最后，用于验证字节稳定（除 model 外其余字节不变）。
+	clientBody := `{"max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hi"}],"model":"alias"}`
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/messages", clientBody)
+	TextHandler(llm.APIFormatAnthropicMessage, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	// 上游字节稳定 + model 改写。
+	got, _ := receivedBody.Load().(string)
+	want := `{"max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hi"}],"model":"claude-3-5-sonnet"}`
+	if got != want {
+		t.Fatalf("upstream body mismatch:\n got=%s\nwant=%s", got, want)
+	}
+	// 客户端收到透传的 SSE 字节。
+	if !strings.Contains(recorder.Body.String(), "message_stop") {
+		t.Fatalf("client stream missing message_stop: %q", recorder.Body.String())
+	}
+}
+
 func TestTextHandlerOpenAIChatStream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

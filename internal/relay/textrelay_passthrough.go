@@ -71,12 +71,11 @@ func isAnthropicPassthrough(format llm.APIFormat, channelType llm.APIFormat) boo
 	return format == llm.APIFormatAnthropicMessage && channelType == llm.APIFormatAnthropicMessage
 }
 
-// passthroughAnthropicNonStream 执行 anthropic 非流式直通：
-// 字节稳定改写 model → 直发上游 → 响应体直通写回 → sidecar 解析 usage。
-func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context, outAdapter transformer.Outbound) (int, *llm.Response, error) {
+// buildPassthroughRequest 构造 anthropic 直通出站请求：字节改写 model + 参数覆盖 + 出站头。
+func buildPassthroughRequest(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context) (*http.Request, error) {
 	body, err := rewriteRawRequestModel(rawBody, modelName)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	// 渠道参数覆盖（对齐本地 forwardViaHTTPPassthrough；显式配置覆盖时接受字节重排）。
 	if channel.ParamOverride != nil && strings.TrimSpace(*channel.ParamOverride) != "" {
@@ -95,7 +94,7 @@ func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel
 	baseURL := strings.TrimSuffix(channel.GetBaseUrl(), "/") + "/messages"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL, bytes.NewReader(body))
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	req.ContentLength = int64(len(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -104,6 +103,16 @@ func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel
 	req.Header.Set("anthropic-beta", defaultAnthropicPassthroughBeta)
 	req.Header.Set("X-API-Key", usedKey.ChannelKey)
 	copyPassthroughHeaders(c, req, channel)
+	return req, nil
+}
+
+// passthroughAnthropicNonStream 执行 anthropic 非流式直通：
+// 字节稳定改写 model → 直发上游 → 响应体直通写回 → sidecar 解析 usage。
+func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context, outAdapter transformer.Outbound) (int, *llm.Response, error) {
+	req, err := buildPassthroughRequest(ctx, channel, usedKey, rawBody, modelName, c)
+	if err != nil {
+		return 0, nil, err
+	}
 
 	nativeClient, err := helper.ChannelHTTPClientWithContext(ctx, channel)
 	if err != nil {
@@ -137,6 +146,76 @@ func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel
 		return resp.StatusCode, nil, nil
 	}
 	return resp.StatusCode, llmResp, nil
+}
+
+// passthroughAnthropicStream 执行 anthropic 流式直通：
+// 字节改写 model → 流式发送 → SSE 字节透传写回 → sidecar 聚合 usage。
+func passthroughAnthropicStream(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context, inAdapter transformer.Inbound) (*llm.Usage, error) {
+	req, err := buildPassthroughRequest(ctx, channel, usedKey, rawBody, modelName, c)
+	if err != nil {
+		return nil, err
+	}
+
+	nativeClient, err := helper.ChannelHTTPClientWithContext(ctx, channel)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := nativeClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, fmt.Errorf("upstream error: %d: %s", resp.StatusCode, truncateBodyForMessage(errBody))
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.Contains(strings.ToLower(ct), "text/event-stream") {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+		return nil, fmt.Errorf("upstream returned non-SSE content-type %q: %s", ct, string(body))
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	// 透传 SSE 字节 + 缓冲原始流供 sidecar 聚合。
+	var rawBuf bytes.Buffer
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			rawBuf.Write(buf[:n])
+			if _, werr := c.Writer.Write(buf[:n]); werr != nil {
+				return nil, werr
+			}
+			c.Writer.Flush()
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// sidecar 聚合 usage（非关键路径）。
+	if inAdapter != nil && rawBuf.Len() > 0 {
+		decoder := httpclient.NewDefaultSSEDecoder(ctx, io.NopCloser(bytes.NewReader(rawBuf.Bytes())))
+		var events []*httpclient.StreamEvent
+		for decoder.Next() {
+			events = append(events, decoder.Current())
+		}
+		if len(events) > 0 {
+			_, meta, err := inAdapter.AggregateStreamChunks(ctx, events)
+			if err == nil {
+				return meta.Usage, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // copyPassthroughHeaders 复制客户端 header（过滤 hop-by-hop）并叠加渠道自定义 header。
