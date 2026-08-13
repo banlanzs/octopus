@@ -2,9 +2,12 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/helper"
@@ -123,6 +126,8 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 			lastErr = err
 			continue
 		}
+		// 渠道级请求定制：参数覆盖（仅 JSON body）+ 自定义 header（敏感头保持转换器已写优先）。
+		applyAxonChannelOptions(channel, outReq)
 
 		nativeClient, err := helper.ChannelHTTPClientWithContext(ctx, channel)
 		if err != nil {
@@ -203,6 +208,34 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	}
 	metrics.Save(ctx, false, lastErr, iter.Attempts())
 	resp.Error(c, http.StatusBadGateway, lastErr.Error())
+}
+
+// applyAxonChannelOptions 在出站请求上应用渠道级定制：参数覆盖 + 自定义 header。
+func applyAxonChannelOptions(channel *dbmodel.Channel, outReq *httpclient.Request) {
+	// ParamOverride 只覆盖 JSON 请求体（multipart 图片编辑等不能按 map 合并）。
+	if channel.ParamOverride != nil && *channel.ParamOverride != "" &&
+		strings.Contains(strings.ToLower(outReq.Headers.Get("Content-Type")+" "+outReq.ContentType), "application/json") {
+		var bodyMap map[string]any
+		if err := json.Unmarshal(outReq.Body, &bodyMap); err == nil {
+			var override map[string]any
+			if err := json.Unmarshal([]byte(*channel.ParamOverride), &override); err == nil {
+				maps.Copy(bodyMap, override)
+				if modified, err := json.Marshal(bodyMap); err == nil {
+					outReq.Body = modified
+				}
+			}
+		}
+	}
+	// 自定义 header；敏感头（认证）保持 transformer 已写优先，避免覆盖鉴权。
+	for _, h := range channel.CustomHeader {
+		if h.HeaderKey == "" {
+			continue
+		}
+		if outReq.Headers.Get(h.HeaderKey) != "" && httpclient.IsSensitiveHeader(h.HeaderKey) {
+			continue
+		}
+		outReq.Headers.Set(h.HeaderKey, h.HeaderValue)
+	}
 }
 
 // axonErrorStatusCode 从 axonhub httpclient 错误中提取上游 HTTP 状态码。
