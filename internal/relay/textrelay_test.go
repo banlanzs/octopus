@@ -465,6 +465,127 @@ func TestTextHandlerOpenAIEmbeddingRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTextHandlerCrossProtocolOpenAIToAnthropic(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("upstream decode: %v", err)
+		}
+		// 断言上游收到 anthropic 格式请求（含 max_tokens、messages）
+		if _, ok := req["messages"]; !ok {
+			t.Errorf("upstream request missing anthropic messages: %v", req)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet","content":[{"type":"text","text":"hello from anthropic"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":4}}`))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeAnthropic, "claude-3-5-sonnet", upstream.URL)
+
+	// 客户端发 openai chat 格式请求，期望收到 openai chat 格式响应。
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"hi"}]}`)
+	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, recorder.Body.String())
+	}
+	// openai chat 格式响应：choices[].message.content
+	choices, ok := resp["choices"].([]any)
+	if !ok || len(choices) != 1 {
+		t.Fatalf("expected openai chat choices, got %v", resp["choices"])
+	}
+	msg := choices[0].(map[string]any)["message"].(map[string]any)
+	if msg["content"] != "hello from anthropic" {
+		t.Fatalf("content = %v, want hello from anthropic", msg["content"])
+	}
+}
+
+func TestTextHandlerMultiChannelFailover(t *testing.T) {
+	// 渠道 A：返回 500；渠道 B：返回成功。
+	failUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"boom"}`))
+	}))
+	defer failUpstream.Close()
+
+	okUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","model":"gpt-4o-fo","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`))
+	}))
+	defer okUpstream.Close()
+
+	if dbpkg.GetDB() != nil {
+		_ = dbpkg.Close()
+	}
+	if err := dbpkg.InitDB("sqlite", filepath.Join(t.TempDir(), "fo.db"), false); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(func() { _ = dbpkg.Close() })
+	ctx := context.Background()
+
+	chA := &model.Channel{
+		Name: "fo-fail", Type: outbound.OutboundTypeOpenAIChat, Enabled: true,
+		BaseUrls: []model.BaseUrl{{URL: failUpstream.URL}}, Model: "gpt-4o-fo",
+		Keys: []model.ChannelKey{{Enabled: true, ChannelKey: "k"}},
+	}
+	chB := &model.Channel{
+		Name: "fo-ok", Type: outbound.OutboundTypeOpenAIChat, Enabled: true,
+		BaseUrls: []model.BaseUrl{{URL: okUpstream.URL}}, Model: "gpt-4o-fo",
+		Keys: []model.ChannelKey{{Enabled: true, ChannelKey: "k"}},
+	}
+	if err := op.ChannelCreate(chA, ctx); err != nil {
+		t.Fatalf("ChannelCreate A: %v", err)
+	}
+	if err := op.ChannelCreate(chB, ctx); err != nil {
+		t.Fatalf("ChannelCreate B: %v", err)
+	}
+	if err := op.GroupCreate(&model.Group{
+		Name: "gpt-4o-fo", Mode: model.GroupModeRoundRobin,
+		Items: []model.GroupItem{
+			{ChannelID: chA.ID, ModelName: "gpt-4o-fo", Weight: 1},
+			{ChannelID: chB.ID, ModelName: "gpt-4o-fo", Weight: 1},
+		},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate: %v", err)
+	}
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"gpt-4o-fo","messages":[{"role":"user","content":"hi"}]}`)
+	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 after failover (body=%s)", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDetectRouteMismatchTargetAxon(t *testing.T) {
+	cases := []struct {
+		name   string
+		format llm.APIFormat
+		err    string
+		want   model.SiteModelRouteType
+		ok     bool
+	}{
+		{"anthropic messages", llm.APIFormatOpenAIChatCompletion, "upstream /messages rejected", model.SiteModelRouteTypeAnthropic, true},
+		{"anthropic version", llm.APIFormatOpenAIChatCompletion, "anthropic-version unsupported", model.SiteModelRouteTypeAnthropic, true},
+		{"responses", llm.APIFormatOpenAIChatCompletion, "use /responses api", model.SiteModelRouteTypeOpenAIResponse, true},
+		{"stream mismatch chat", llm.APIFormatOpenAIChatCompletion, "text/event-stream mismatch", model.SiteModelRouteTypeOpenAIResponse, true},
+		{"stream mismatch non-chat", llm.APIFormatAnthropicMessage, "text/event-stream mismatch", "", false},
+		{"no signal", llm.APIFormatOpenAIChatCompletion, "generic error", "", false},
+	}
+	for _, c := range cases {
+		got, ok := detectRouteMismatchTargetAxon(c.format, errors.New(c.err))
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s: got (%q,%v), want (%q,%v)", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
 func TestTextHandlerOpenAIChatStream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
