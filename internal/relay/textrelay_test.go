@@ -309,6 +309,54 @@ func (s *blockingStream) Close() error {
 
 var _ streams.Stream[*httpclient.StreamEvent] = (*blockingStream)(nil)
 
+func TestApplyVolcengineCompensation(t *testing.T) {
+	outReq := &httpclient.Request{
+		Body: []byte(`{"model":"doubao-seed-1-6-251015","input":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"metadata":{"k":"v"},"reasoning":{"effort":"medium"}}`),
+	}
+	llmReq := &llm.Request{Model: "doubao-seed-1-6-251015", ReasoningEffort: "medium"}
+
+	applyVolcengineCompensation(outReq, llmReq)
+
+	var m map[string]any
+	if err := json.Unmarshal(outReq.Body, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if thinking, ok := m["thinking"].(map[string]any); !ok || thinking["type"] != "enabled" {
+		t.Fatalf("thinking = %v, want {type:enabled}", m["thinking"])
+	}
+	if _, ok := m["metadata"]; ok {
+		t.Fatal("metadata should be removed")
+	}
+	if _, ok := m["reasoning"]; !ok {
+		t.Fatal("reasoning should be kept for whitelisted model")
+	}
+	input := m["input"].([]any)
+	last := input[len(input)-1].(map[string]any)
+	if last["partial"] != true {
+		t.Fatalf("last assistant partial = %v, want true", last["partial"])
+	}
+}
+
+func TestApplyVolcengineCompensationNonWhitelistModel(t *testing.T) {
+	outReq := &httpclient.Request{
+		Body: []byte(`{"model":"other-model","input":"hi","reasoning":{"effort":"high"}}`),
+	}
+	llmReq := &llm.Request{Model: "other-model", ReasoningEffort: "high"}
+
+	applyVolcengineCompensation(outReq, llmReq)
+
+	var m map[string]any
+	if err := json.Unmarshal(outReq.Body, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := m["reasoning"]; ok {
+		t.Fatal("reasoning should be removed for non-whitelisted model")
+	}
+	if thinking, ok := m["thinking"].(map[string]any); !ok || thinking["type"] != "enabled" {
+		t.Fatalf("thinking = %v, want {type:enabled}", m["thinking"])
+	}
+}
+
 func TestTextHandlerOpenAIChatStream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

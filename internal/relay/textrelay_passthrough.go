@@ -21,6 +21,49 @@ import (
 // DefaultAnthropicPassthroughBeta 保持一致，确保直通请求命中 prompt-caching。
 const defaultAnthropicPassthroughBeta = "prompt-caching-2024-07-31,extended-cache-ttl-2025-04-11"
 
+// volcengineReasoningModels 是火山 Responses 端点支持 reasoning_effort 的模型白名单（对齐自研 transformer）。
+var volcengineReasoningModels = map[string]bool{
+	"doubao-seed-1-8-251228":      true,
+	"doubao-seed-1-6-lite-251015": true,
+	"doubao-seed-1-6-251015":      true,
+}
+
+// applyVolcengineCompensation 在 axonhub responses outbound 生成的请求体上补齐
+// 火山（volcengine/doubao）Responses 特化（对齐自研 volcengine.ResponseOutbound）：
+//   - metadata 置空（火山不支持）
+//   - thinking 字段：minimal→disabled，low/medium/high→enabled
+//   - input 为数组时，最后一条 assistant 设 partial（续写语义）
+//   - reasoning 白名单：非白名单模型清空 reasoning
+func applyVolcengineCompensation(outReq *httpclient.Request, llmReq *llm.Request) {
+	var bodyMap map[string]any
+	if err := json.Unmarshal(outReq.Body, &bodyMap); err != nil {
+		return
+	}
+
+	delete(bodyMap, "metadata")
+
+	switch llmReq.ReasoningEffort {
+	case "minimal":
+		bodyMap["thinking"] = map[string]any{"type": "disabled"}
+	case "low", "medium", "high":
+		bodyMap["thinking"] = map[string]any{"type": "enabled"}
+	}
+
+	if input, ok := bodyMap["input"].([]any); ok && len(input) > 0 {
+		if last, ok := input[len(input)-1].(map[string]any); ok && last["role"] == "assistant" {
+			last["partial"] = true
+		}
+	}
+
+	if !volcengineReasoningModels[llmReq.Model] {
+		delete(bodyMap, "reasoning")
+	}
+
+	if modified, err := json.Marshal(bodyMap); err == nil {
+		outReq.Body = modified
+	}
+}
+
 // isAnthropicPassthrough 判断是否可做 anthropic→anthropic 同格式直通。
 // 直通保留客户端请求字节（仅改写 model），对 Anthropic prompt caching 至关重要。
 func isAnthropicPassthrough(format llm.APIFormat, channelType llm.APIFormat) bool {

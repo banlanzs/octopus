@@ -94,7 +94,10 @@ func NewOutbound(channelType llm.APIFormat, requestType llm.RequestType, baseURL
 		case llm.APIFormatGeminiContents:
 			return gemini.NewOutboundTransformer(baseURL, key)
 		case ChannelTypeDoubao:
-			return doubao.NewOutboundTransformer(baseURL, key)
+			// volcengine（火山）渠道保留自研 Responses 协议语义：用 responses outbound
+			// 而非 doubao 的 chat_completions；火山特有补偿（partial input / thinking）
+			// 在 relay 层 applyVolcengineCompensation 补齐。
+			return responses.NewOutboundTransformer(baseURL, key)
 		default:
 			return nil, fmt.Errorf("channel type %s is not compatible with %s request", channelType, requestType)
 		}

@@ -184,6 +184,10 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 			}
 			// 渠道级请求定制：参数覆盖（仅 JSON body）+ 自定义 header（敏感头保持转换器已写优先）。
 			applyAxonChannelOptions(channel, outReq)
+			// 火山（volcengine）渠道：在 responses outbound 之上补齐火山 Responses 特化。
+			if channelType == axonadapter.ChannelTypeDoubao {
+				applyVolcengineCompensation(outReq, llmReq)
+			}
 
 			nativeClient, err := helper.ChannelHTTPClientWithContext(ctx, channel)
 			if err != nil {
