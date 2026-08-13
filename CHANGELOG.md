@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 移除分组健康检查（结果仅供展示，无调度用途）
+
+- **移除后端**：`internal/grouphealth` 的 Service 编排、`op/group_health.go` repository、`model/group_health.go` 模型、`handlers/group_health.go` HTTP 接口（`/api/v1/group/health/*`），以及建表迁移 `migrate/010.go`、`group_health_probe_mode.go` 与 `SettingKeyGroupHealthEnabled` 设置项。
+- **移除前端**：`api/endpoints/group-health.ts`、分组卡片健康徽章、首页健康摘要条/总览、可靠性设置开关，以及三语言 locale 对应文案。
+- **保留探活能力**：`internal/grouphealth/probe.go` 的 `Prober` 被 AutoRank 主动探测与站点级被动退役（POR）复用，本次不动。
+
 ### 文本 API 转换迁移至 axonhub/llm（全量替换 + 各取所长）
 
 - **Go 工具链升级**：`go 1.25` → `go 1.26`，并引入 `github.com/looplj/axonhub/llm@fc1d27da`（GitHub unstable 固定 sha）+ `wtj-0527/go-sse` fork replace。

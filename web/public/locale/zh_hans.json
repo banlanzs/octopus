@@ -133,20 +133,6 @@
             "sortByTokens": "Tokens",
             "noData": "暂无排行数据",
             "successRate": "成功率"
-        },
-        "groupHealth": {
-            "title": "分组健康",
-            "total": "{count} 个分组",
-            "running": "{count} 运行中",
-            "success": "{count} 健康",
-            "partial": "{count} 部分可用",
-            "failed": "{count} 失败",
-            "idle": "{count} 未检查",
-            "runAll": "全部检查",
-            "runAllFull": "全部完整探活",
-            "viewDetails": "查看详情",
-            "detailTitle": "分组健康详情",
-            "detailDescription": "在首页查看各分组最新健康快照，并直接执行标准探活或完整探活。"
         }
     },
     "setting": {
@@ -196,10 +182,6 @@
             "description": "同时作为流中心跳间隔与上游流建立前的首次心跳延迟；设置为 0 禁用。Cloudflare 反代场景建议 30-60 秒。",
             "compatibility": "部分客户端可能错误处理 SSE 注释，如遇兼容问题可关闭。",
             "placeholder": "0 = 禁用，建议 30-60"
-        },
-        "groupHealth": {
-            "label": "分组健康检查",
-            "description": "启用后显示首页分组健康摘要、分组卡片健康状态，并允许手动运行健康检查。"
         },
         "circuitBreaker": {
             "title": "熔断器配置",
@@ -741,37 +723,6 @@
             "auto": "自动排序"
         },
         "health": {
-            "title": "健康",
-            "detailTitle": "分组健康详情",
-            "run": "检查",
-            "runFull": "完整探活",
-            "lastRun": "上次检查 {time}",
-            "never": "从未检查",
-            "status": "状态",
-            "healthy": "健康",
-            "healthyCount": "{success}/{total} 健康",
-            "duration": "耗时",
-            "attempts": "尝试",
-            "attemptListToggle": "尝试列表（{count}）",
-            "attemptStatus": {
-                "success": "成功",
-                "failed": "失败",
-                "skipped": "跳过"
-            },
-            "statusValue": {
-                "idle": "未检查",
-                "running": "检查中",
-                "success": "健康",
-                "partial": "部分可用",
-                "failed": "失败"
-            },
-            "probeMode": {
-                "standard": "标准",
-                "full": "完整"
-            },
-            "empty": "暂无健康快照。",
-            "errorDetails": "错误详情",
-            "noHttpStatus": "无 HTTP 状态",
             "autoRank": {
                 "title": "自动排序健康度",
                 "effectiveScore": "有效分数",

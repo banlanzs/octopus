@@ -133,20 +133,6 @@
             "sortByTokens": "Tokens",
             "noData": "No ranking data",
             "successRate": "Success Rate"
-        },
-        "groupHealth": {
-            "title": "Group Health",
-            "total": "{count} groups",
-            "running": "{count} running",
-            "success": "{count} healthy",
-            "partial": "{count} partial",
-            "failed": "{count} failed",
-            "idle": "{count} unchecked",
-            "runAll": "Run All",
-            "runAllFull": "Full Probe All",
-            "viewDetails": "View details",
-            "detailTitle": "Group health details",
-            "detailDescription": "Inspect the latest health snapshot for each group and run standard or full probes from the home dashboard."
         }
     },
     "setting": {
@@ -196,10 +182,6 @@
             "description": "Applies to both the in-stream heartbeat interval and the first heartbeat delay before the upstream stream is established; 0 disables. 30-60 seconds is recommended behind Cloudflare.",
             "compatibility": "Some clients may mishandle SSE comments, so disable it if compatibility issues occur.",
             "placeholder": "0 = disabled, recommend 30-60"
-        },
-        "groupHealth": {
-            "label": "Group Health Checks",
-            "description": "When enabled, show the home health summary, group-card health status, and allow manual health checks."
         },
         "circuitBreaker": {
             "title": "Circuit Breaker",
@@ -741,37 +723,6 @@
             "auto": "Auto"
         },
         "health": {
-            "title": "Health",
-            "detailTitle": "Group Health Details",
-            "run": "Run",
-            "runFull": "Full Probe",
-            "lastRun": "Last run {time}",
-            "never": "Never checked",
-            "status": "Status",
-            "healthy": "Healthy",
-            "healthyCount": "{success}/{total} healthy",
-            "duration": "Duration",
-            "attempts": "Attempts",
-            "attemptListToggle": "Attempts ({count})",
-            "attemptStatus": {
-                "success": "Success",
-                "failed": "Failed",
-                "skipped": "Skipped"
-            },
-            "statusValue": {
-                "idle": "Idle",
-                "running": "Running",
-                "success": "Healthy",
-                "partial": "Partial",
-                "failed": "Failed"
-            },
-            "probeMode": {
-                "standard": "Standard",
-                "full": "Full"
-            },
-            "empty": "No health snapshot yet.",
-            "errorDetails": "Error details",
-            "noHttpStatus": "No HTTP status",
             "autoRank": {
                 "title": "Auto-rank health",
                 "effectiveScore": "Effective score",

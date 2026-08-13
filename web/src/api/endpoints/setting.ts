@@ -33,7 +33,6 @@ export const SettingKey = {
     ResponsesWSDefaultMode: 'responses_ws_default_mode',
     SSEHeartbeatInterval: 'sse_heartbeat_interval',
     SSEPreStreamHeartbeatDelay: 'sse_pre_stream_heartbeat_delay',
-    GroupHealthEnabled: 'group_health_enabled',
     ProjectedChannelAutoGroupEnabled: 'projected_channel_auto_group_enabled',
     OutlierRetireEnabled: 'outlier_retire_enabled',
     OutlierRetireInterval: 'outlier_retire_interval',
@@ -110,25 +109,6 @@ export function useSettingValue(key: string, defaultValue = '') {
     };
 }
 
-export function useGroupHealthEnabled() {
-    const { value, ...query } = useSettingValue(SettingKey.GroupHealthEnabled, 'false');
-    return {
-        ...query,
-        enabled: value === 'true',
-    };
-}
-
-/**
- * 设置 Setting Hook
- * 
- * @example
- * const setSetting = useSetSetting();
- * 
- * setSetting.mutate({
- *   key: 'theme',
- *   value: 'dark',
- * });
- */
 export function useSetSetting() {
     const queryClient = useQueryClient();
 
