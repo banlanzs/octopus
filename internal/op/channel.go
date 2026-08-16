@@ -282,6 +282,10 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "probe_enabled")
 		updates.ProbeEnabled = *req.ProbeEnabled
 	}
+	if req.SchedulingExempt != nil {
+		selectFields = append(selectFields, "scheduling_exempt")
+		updates.SchedulingExempt = *req.SchedulingExempt
+	}
 	if req.PriceMultiplier != nil {
 		selectFields = append(selectFields, "price_multiplier")
 		updates.PriceMultiplier = *req.PriceMultiplier

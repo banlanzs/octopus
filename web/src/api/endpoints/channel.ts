@@ -79,6 +79,7 @@ export type Channel = {
     match_regex?: string | null;
     force_deep_seek_thinking?: boolean;
     probe_enabled?: boolean;
+    scheduling_exempt?: boolean;
     price_multiplier: number;
     managed: boolean;
     managed_source?: ManagedChannelSource | null;
@@ -113,6 +114,7 @@ export type CreateChannelRequest = {
     match_regex?: string | null;
     force_deep_seek_thinking?: boolean;
     probe_enabled?: boolean;
+    scheduling_exempt?: boolean;
     price_multiplier?: number;
 };
 
@@ -137,6 +139,7 @@ export type UpdateChannelRequest = {
     match_regex?: string | null;
     force_deep_seek_thinking?: boolean;
     probe_enabled?: boolean;
+    scheduling_exempt?: boolean;
     price_multiplier?: number;
     // keys diff
     keys_to_add?: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
@@ -152,6 +155,33 @@ export type FetchModelRequest = {
     proxy_config_id?: number | null;
     match_regex?: string | null;
     custom_header?: CustomHeader[];
+};
+
+/**
+ * 渠道测试请求：使用表单草稿或已保存配置向上游发送一条极小非流式请求。
+ */
+export type ChannelTestRequest = FetchModelRequest & {
+    model: string;
+    custom_model?: string;
+    param_override?: string | null;
+    force_deep_seek_thinking?: boolean;
+};
+
+export type ChannelTestUsage = {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+};
+
+export type ChannelTestResult = {
+    success: boolean;
+    status_code: number;
+    duration_ms: number;
+    model: string;
+    protocol: string;
+    output?: string;
+    error?: string;
+    usage?: ChannelTestUsage | null;
 };
 
 /**
@@ -182,6 +212,7 @@ export function useChannelList() {
                 keys: item.keys ?? [],
                 proxy_mode: item.proxy_mode ?? 'direct',
                 proxy_config_id: item.proxy_config_id ?? null,
+                scheduling_exempt: item.scheduling_exempt ?? false,
             }) satisfies Channel,
             formatted: {
                 input_token: formatCount(item.stats.input_token),
@@ -354,6 +385,23 @@ export function useFetchModel() {
         },
         onError: (error) => {
             logger.error('模型列表获取失败:', error);
+        },
+    });
+}
+
+/**
+ * 渠道测试 Hook：非流式极小请求，返回结构化结果（失败也由 data 表达）。
+ */
+export function useTestChannel() {
+    return useMutation({
+        mutationFn: async (data: ChannelTestRequest) => {
+            return apiClient.post<ChannelTestResult>('/api/v1/channel/test', data);
+        },
+        onSuccess: (data) => {
+            logger.log('渠道测试完成:', data);
+        },
+        onError: (error) => {
+            logger.error('渠道测试请求失败:', error);
         },
     });
 }

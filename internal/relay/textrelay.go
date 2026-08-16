@@ -94,6 +94,10 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	// Metrics：复用现有日志/统计链路，InternalRequest 传 nil（文本路径用 AxonResponse）。
 	metrics := NewRelayMetrics(apiKeyID, llmReq.Model, httpReq.Body, nil)
 	metrics.RequestPath = c.Request.Method + " " + c.Request.URL.Path
+	// 文本迁移路径同样记录客户端原始请求头与推理强度：
+	// 请求头用于日志详情页「请求头/请求体」分开展示，推理强度用于卡片 badge。
+	metrics.RequestHeaders = serializeRequestHeadersForLog(c.Request.Header)
+	metrics.ReasoningEffort = llmReq.ReasoningEffort
 
 	var lastErr error
 	for iter.Next() {
@@ -109,12 +113,13 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 			iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
 			continue
 		}
+		schedulingExempt := channel.SchedulingExempt
 		usedKey := channel.GetChannelKey()
 		if usedKey.ChannelKey == "" {
 			iter.Skip(channel.ID, 0, channel.Name, "no available key")
 			continue
 		}
-		if iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
+		if !schedulingExempt && iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
 			continue
 		}
 
@@ -272,7 +277,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 						metrics.ActualModel = item.ModelName
 					}
 					recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, sc)
-					if llmResp != nil && llmResp.Usage != nil {
+					if llmResp != nil && llmResp.Usage != nil && !schedulingExempt {
 						if outputTokens := llmResp.Usage.CompletionTokens; isQualityFailureResponseAxon(llmReq, outputTokens) {
 							recordQualityFailure(group, channel.ID, usedKey.ID, item.ModelName, outputTokens, span.Duration().Milliseconds(), 0)
 						}
@@ -427,7 +432,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				}
 
 				// 质量失败检测（工具循环短输出）：与现有 relay 语义一致。
-				if llmResp.Usage != nil {
+				if llmResp.Usage != nil && !schedulingExempt {
 					if outputTokens := llmResp.Usage.CompletionTokens; isQualityFailureResponseAxon(llmReq, outputTokens) {
 						recordQualityFailure(group, channel.ID, usedKey.ID, item.ModelName, outputTokens, span.Duration().Milliseconds(), 0)
 					}
@@ -448,11 +453,14 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 			}
 
 			// 同通道重试耗尽（真实失败，非能力缺失）：一次性记录渠道级失败（熔断/AutoRank/outlier）。
+			// 调度豁免渠道不写任何调度惩罚状态。
 			if lastAttemptErr != nil {
-				if lastSpan != nil {
+				if lastSpan != nil && !schedulingExempt {
 					recordAxonChannelFailure(group, channel, usedKey, lastSpan, item.ModelName, lastStatusCode)
 				}
-				maybeLearnManagedRouteAxon(ctx, channel.ID, item.ModelName, format, lastAttemptErr)
+				if !schedulingExempt {
+					maybeLearnManagedRouteAxon(ctx, channel.ID, item.ModelName, format, lastAttemptErr)
+				}
 				lastErr = lastAttemptErr
 				channelFailed = true
 				break
@@ -523,6 +531,9 @@ func recordAxonSuccess(group dbmodel.Group, channel *dbmodel.Channel, usedKey db
 	})
 	balancer.RecordSuccess(channel.ID, usedKey.ID, modelName)
 	balancer.SetSticky(metrics.APIKeyID, metrics.RequestModel, channel.ID, usedKey.ID)
+	if channel != nil && channel.SchedulingExempt {
+		return
+	}
 	outlierwindow.Report(channel.ID, true, statusCode, time.Now())
 	recordAutoRankResult(group, channel.ID, modelName, true, statusCode, span.Duration().Milliseconds(), 0)
 }
@@ -542,6 +553,9 @@ func recordAxonAttemptFailure(channel *dbmodel.Channel, usedKey dbmodel.ChannelK
 
 // recordAxonChannelFailure 记录渠道级失败（重试耗尽后一次性）：熔断、AutoRank、outlier。
 func recordAxonChannelFailure(group dbmodel.Group, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, span *balancer.AttemptSpan, modelName string, statusCode int) {
+	if channel != nil && channel.SchedulingExempt {
+		return
+	}
 	failureKind := circuitFailureKind(group.RetryEnabled, statusCode)
 	balancer.RecordFailure(channel.ID, usedKey.ID, modelName, failureKind)
 	recordAutoRankResult(group, channel.ID, modelName, false, statusCode, span.Duration().Milliseconds(), 0)

@@ -163,7 +163,8 @@ func TestTextHandlerRecordsRelayLog(t *testing.T) {
 	setupTextRelayTest(t, outbound.OutboundTypeOpenAIChat, "gpt-4o-metrics", upstream.URL)
 
 	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
-		`{"model":"gpt-4o-metrics","messages":[{"role":"user","content":"hi"}]}`)
+		`{"model":"gpt-4o-metrics","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high"}`)
+	c.Request.Header.Set("X-Test-Header", "visible-value")
 
 	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
 
@@ -186,6 +187,12 @@ func TestTextHandlerRecordsRelayLog(t *testing.T) {
 		}
 		if l.InputTokens != 10 || l.OutputTokens != 4 {
 			t.Errorf("tokens = %d/%d, want 10/4", l.InputTokens, l.OutputTokens)
+		}
+		if !strings.Contains(l.RequestHeaders, "X-Test-Header") || !strings.Contains(l.RequestHeaders, "visible-value") {
+			t.Errorf("request headers missing in relay log: %q", l.RequestHeaders)
+		}
+		if l.ReasoningEffort != "high" {
+			t.Errorf("reasoning effort = %q, want high", l.ReasoningEffort)
 		}
 	}
 	if !found {

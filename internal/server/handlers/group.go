@@ -123,9 +123,9 @@ func deleteGroup(c *gin.Context) {
 // ===== 分组导出（调试用） =====
 
 type groupExportResponse struct {
-	ExportedAt string             `json:"exported_at"`
-	Group      groupExportInfo    `json:"group"`
-	Items      []groupExportItem  `json:"items"`
+	ExportedAt string            `json:"exported_at"`
+	Group      groupExportInfo   `json:"group"`
+	Items      []groupExportItem `json:"items"`
 }
 
 type groupExportInfo struct {
@@ -150,22 +150,23 @@ type groupExportItem struct {
 	Weight    int                 `json:"weight"`
 	Channel   *groupExportChannel `json:"channel,omitempty"`
 	// ChannelError 渠道加载失败时的原因（渠道可能已被删除）。
-	ChannelError string `json:"channel_error,omitempty"`
+	ChannelError string                  `json:"channel_error,omitempty"`
 	Health       model.LLMAutoRankHealth `json:"health"`
 }
 
 type groupExportChannel struct {
-	ID                    int                       `json:"id"`
-	Name                  string                    `json:"name"`
-	Type                  int                       `json:"type"`
-	TypeLabel             string                    `json:"type_label"`
-	Enabled               bool                      `json:"enabled"`
-	BaseUrls              []string                  `json:"base_urls"`
-	Models                string                    `json:"models"`
-	ForceDeepSeekThinking bool                      `json:"force_deep_seek_thinking"`
-	Managed               bool                      `json:"managed"`
-	ParamOverride         *string                   `json:"param_override,omitempty"`
-	Keys                  []groupExportChannelKey   `json:"keys"`
+	ID                    int                     `json:"id"`
+	Name                  string                  `json:"name"`
+	Type                  int                     `json:"type"`
+	TypeLabel             string                  `json:"type_label"`
+	Enabled               bool                    `json:"enabled"`
+	BaseUrls              []string                `json:"base_urls"`
+	Models                string                  `json:"models"`
+	ForceDeepSeekThinking bool                    `json:"force_deep_seek_thinking"`
+	SchedulingExempt      bool                    `json:"scheduling_exempt"`
+	Managed               bool                    `json:"managed"`
+	ParamOverride         *string                 `json:"param_override,omitempty"`
+	Keys                  []groupExportChannelKey `json:"keys"`
 	// PORRetired 被动离群退役状态；未退役/无记录时省略。
 	PORRetired *model.SiteChannelOutlierState `json:"por_retired,omitempty"`
 }
@@ -248,6 +249,7 @@ func buildGroupExportChannel(ch *model.Channel, item model.GroupItem, ctx contex
 		BaseUrls:              baseURLList(ch.BaseUrls),
 		Models:                ch.Model,
 		ForceDeepSeekThinking: ch.ForceDeepSeekThinking,
+		SchedulingExempt:      ch.SchedulingExempt,
 		Managed:               ch.Managed,
 		ParamOverride:         ch.ParamOverride,
 	}

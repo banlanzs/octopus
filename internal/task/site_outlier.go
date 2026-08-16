@@ -76,6 +76,10 @@ func runOutlierRetire(ctx context.Context, prober channelProber, cfg outlierConf
 		if err != nil || !ch.Enabled {
 			continue
 		}
+		// 调度策略豁免：不参与被动离群退役（用户已选择让渠道跳过自动冷却/禁用）。
+		if ch.SchedulingExempt {
+			continue
+		}
 		st := outlierwindow.Evaluate(b.ChannelID, now)
 		if st.Candidate {
 			candidates = append(candidates, candidate{channelID: b.ChannelID, stats: st})
@@ -214,6 +218,10 @@ func handleSiteOutage(ctx context.Context, prober channelProber, accountID int, 
 		if err != nil || !ch.Enabled {
 			continue
 		}
+		// 豁免渠道不作为站点故障的探活证据，也不参与自动禁用。
+		if ch.SchedulingExempt {
+			continue
+		}
 		usedKey := ch.GetChannelKey()
 		modelName := firstModelName(ch.Model)
 		if usedKey.ID == 0 || strings.TrimSpace(usedKey.ChannelKey) == "" || modelName == "" {
@@ -253,6 +261,10 @@ func handleSiteOutage(ctx context.Context, prober channelProber, accountID int, 
 		if err != nil || !ch.Enabled {
 			continue
 		}
+		// 调度策略豁免渠道不参与站点级自动禁用。
+		if ch.SchedulingExempt {
+			continue
+		}
 		chStats := outlierwindow.Evaluate(chID, now)
 		snap := model.OutlierSnapshot{
 			Samples:          chStats.Samples,
@@ -288,6 +300,10 @@ func countHealthySiblings(ctx context.Context, siblings []int, self int, now tim
 		}
 		ch, err := op.ChannelGet(sib, ctx)
 		if err != nil || !ch.Enabled {
+			continue
+		}
+		// 豁免渠道不提供负证据，也不应被统计为"不健康兄弟"。
+		if ch.SchedulingExempt {
 			continue
 		}
 		total++

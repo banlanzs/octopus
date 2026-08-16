@@ -154,6 +154,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 			iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
 			continue
 		}
+		schedulingExempt := channel.SchedulingExempt
 
 		// channel.Type 限制：仅 OpenAI Chat/Responses（auto 渠道按 OpenAI 格式处理）
 		if channel.Type != outbound.OutboundTypeOpenAIChat && channel.Type != outbound.OutboundTypeOpenAIResponse && !outbound.IsAutoType(channel.Type) {
@@ -168,7 +169,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 		}
 
 		// 熔断检查（熔断 key 使用 actualModel=item.ModelName）
-		if iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
+		if !schedulingExempt && iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
 			continue
 		}
 
@@ -214,7 +215,9 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 			balancer.RecordSuccess(channel.ID, usedKey.ID, item.ModelName)
 			// 会话保持：更新粘性记录
 			balancer.SetSticky(apiKeyID, requestModel, channel.ID, usedKey.ID)
-			recordAutoRankResult(group, channel.ID, item.ModelName, true, statusCode, durationMS, ttfbMS)
+			if !schedulingExempt {
+				recordAutoRankResult(group, channel.ID, item.ModelName, true, statusCode, durationMS, ttfbMS)
+			}
 
 			metrics.SaveWithChannelStats(ctx, true, nil, iter.Attempts(), false)
 			return
@@ -230,10 +233,12 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 			RequestFailed: 1,
 		})
 
-		// 熔断器：记录失败
-		balancer.RecordFailure(channel.ID, usedKey.ID, item.ModelName, circuitFailureKind(group.RetryEnabled, statusCode))
-		if ctx.Err() == nil {
-			recordAutoRankResult(group, channel.ID, item.ModelName, false, statusCode, durationMS, ttfbMS)
+		// 熔断器：记录失败（调度豁免渠道不写任何调度惩罚状态）
+		if !schedulingExempt {
+			balancer.RecordFailure(channel.ID, usedKey.ID, item.ModelName, circuitFailureKind(group.RetryEnabled, statusCode))
+			if ctx.Err() == nil {
+				recordAutoRankResult(group, channel.ID, item.ModelName, false, statusCode, durationMS, ttfbMS)
+			}
 		}
 
 		if written {

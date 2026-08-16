@@ -211,6 +211,10 @@ func collectAutoRankProbeCandidates(ctx context.Context) ([]autoRankProbeCandida
 			if channel == nil || !channel.Enabled || !channel.ProbeEnabled {
 				continue
 			}
+			// 调度策略豁免渠道不参与主动探测与健康样本补充。
+			if channel.SchedulingExempt {
+				continue
+			}
 			usedKey := channel.GetChannelKey()
 			if usedKey.ID == 0 || strings.TrimSpace(usedKey.ChannelKey) == "" {
 				continue

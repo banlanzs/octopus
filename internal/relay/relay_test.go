@@ -2225,8 +2225,8 @@ data: [DONE]
 	}
 
 	group := &model.Group{
-		Name:            "relay-529-group",
-		Mode:            model.GroupModeFailover,
+		Name:              "relay-529-group",
+		Mode:              model.GroupModeFailover,
 		FirstTokenTimeOut: 0,
 	}
 	if err := op.GroupCreate(group, ctx); err != nil {
@@ -2344,5 +2344,97 @@ data: [DONE]
 	healthyStats := balancer.GetAutoRankStatsForGroup(group.ID, healthyChannel.ID, "target-model")
 	if healthyStats.Samples == 0 || healthyStats.Failures > 0 {
 		t.Fatalf("expected healthy channel success sample, got %+v", healthyStats)
+	}
+}
+
+func TestSchedulingExemptChannelBypassesBreakersAndSkipsFeedback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := setupRelayTestDB(t)
+
+	if err := op.SettingSetInt(model.SettingKeyCircuitBreakerThreshold, 2); err != nil {
+		t.Fatalf("SettingSetInt threshold failed: %v", err)
+	}
+	if err := op.SettingSetInt(model.SettingKeyCircuitBreakerChannelThreshold, 2); err != nil {
+		t.Fatalf("SettingSetInt channel threshold failed: %v", err)
+	}
+
+	var hits atomic.Int32
+	var fail atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if fail.Load() {
+			http.Error(w, `{"error":"transient overload"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"chat.completion","created":1,"model":"exempt-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	channel := &model.Channel{
+		Name:             "relay-scheduling-exempt",
+		Type:             outbound.OutboundTypeOpenAIChat,
+		Enabled:          true,
+		SchedulingExempt: true,
+		BaseUrls:         []model.BaseUrl{{URL: server.URL + "/v1"}},
+		Model:            "exempt-model",
+		Keys:             []model.ChannelKey{{Enabled: true, ChannelKey: "exempt-key"}},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+	keyID := channel.Keys[0].ID
+
+	group := &model.Group{Name: "relay-scheduling-exempt-group", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: channel.ID, ModelName: "exempt-model", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd failed: %v", err)
+	}
+
+	// 预先同时触发 key 级与渠道级熔断，验证豁免渠道不会被跳过。
+	for i := 0; i < 5; i++ {
+		balancer.RecordFailure(channel.ID, keyID, "exempt-model", balancer.FailureHard)
+		balancer.RecordChannelFailure(channel.ID, balancer.FailureHard)
+	}
+	if tripped, _ := balancer.IsTripped(channel.ID, keyID, "exempt-model"); !tripped {
+		t.Fatal("expected key breaker to be tripped before request")
+	}
+	if tripped, _ := balancer.IsChannelTripped(channel.ID); !tripped {
+		t.Fatal("expected channel breaker to be tripped before request")
+	}
+
+	makeRequest := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"relay-scheduling-exempt-group","messages":[{"role":"user","content":"hello"}]}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		Handler(inbound.InboundTypeOpenAIChat, c)
+		return recorder
+	}
+
+	// 熔断中的豁免渠道仍应真实转发并成功。
+	resp := makeRequest()
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected exempt channel to bypass breakers and succeed, got status %d body %s", resp.Code, resp.Body.String())
+	}
+
+	// 连续失败也不应触发新的熔断：每次都真实转发并得到上游 500，而不是被冷却后 502。
+	fail.Store(true)
+	for i := 0; i < 3; i++ {
+		resp := makeRequest()
+		if resp.Code != http.StatusInternalServerError {
+			t.Fatalf("expected exempt channel to keep trying upstream and return 500, got status %d body %s", resp.Code, resp.Body.String())
+		}
+	}
+	if hits.Load() != 4 {
+		t.Fatalf("expected 4 upstream calls (1 success + 3 failures), got %d", hits.Load())
+	}
+	if tripped, _ := balancer.IsTripped(channel.ID, keyID, "exempt-model"); tripped {
+		t.Fatal("exempt channel must not trip key breaker")
+	}
+	if tripped, _ := balancer.IsChannelTripped(channel.ID); tripped {
+		t.Fatal("exempt channel must not trip channel breaker")
 	}
 }

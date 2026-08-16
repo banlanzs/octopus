@@ -88,6 +88,8 @@ func HandleResponsesCompact(c *gin.Context) {
 
 	metricsReq := &transformerModel.InternalLLMRequest{Model: requestModel, RawRequest: body}
 	metrics := NewRelayMetrics(apiKeyID, requestModel, body, metricsReq)
+	metrics.RequestPath = c.Request.Method + " " + c.Request.URL.Path
+	metrics.RequestHeaders = serializeRequestHeadersForLog(c.Request.Header)
 
 	var lastErr error
 	var lastStatusCode int
@@ -121,6 +123,7 @@ func HandleResponsesCompact(c *gin.Context) {
 			iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
 			continue
 		}
+		schedulingExempt := channel.SchedulingExempt
 		if !supportsResponsesCompact(channel.Type) {
 			iter.Skip(channel.ID, 0, channel.Name, "channel type not compatible with responses compact")
 			continue
@@ -142,7 +145,7 @@ func HandleResponsesCompact(c *gin.Context) {
 			if usedKey.ChannelKey == "" {
 				break
 			}
-			if !iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
+			if schedulingExempt || !iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
 				break
 			}
 			selectOpts.ExcludeKeyIDs[usedKey.ID] = struct{}{}
@@ -190,18 +193,22 @@ func HandleResponsesCompact(c *gin.Context) {
 			op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{RequestSuccess: 1})
 			balancer.RecordSuccess(channel.ID, usedKey.ID, item.ModelName)
 			balancer.SetSticky(apiKeyID, requestModel, channel.ID, usedKey.ID)
-			outlierwindow.Report(channel.ID, true, statusCode, time.Now())
-			recordAutoRankResult(group, channel.ID, item.ModelName, true, statusCode, time.Since(candidateStartedAt).Milliseconds(), 0)
+			if !schedulingExempt {
+				outlierwindow.Report(channel.ID, true, statusCode, time.Now())
+				recordAutoRankResult(group, channel.ID, item.ModelName, true, statusCode, time.Since(candidateStartedAt).Milliseconds(), 0)
+			}
 			metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
 			return
 		}
 
 		op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{RequestFailed: 1})
-		failureKind := circuitFailureKind(group.RetryEnabled, statusCode)
-		balancer.RecordFailure(channel.ID, usedKey.ID, item.ModelName, failureKind)
-		outlierwindow.Report(channel.ID, false, statusCode, time.Now())
-		if c.Request.Context().Err() == nil {
-			recordAutoRankResult(group, channel.ID, item.ModelName, false, statusCode, time.Since(candidateStartedAt).Milliseconds(), 0)
+		if !schedulingExempt {
+			failureKind := circuitFailureKind(group.RetryEnabled, statusCode)
+			balancer.RecordFailure(channel.ID, usedKey.ID, item.ModelName, failureKind)
+			outlierwindow.Report(channel.ID, false, statusCode, time.Now())
+			if c.Request.Context().Err() == nil {
+				recordAutoRankResult(group, channel.ID, item.ModelName, false, statusCode, time.Since(candidateStartedAt).Milliseconds(), 0)
+			}
 		}
 		lastErr = attemptErr
 		lastStatusCode = statusCode

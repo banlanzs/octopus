@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/channeltest"
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -45,6 +46,10 @@ func init() {
 		AddRoute(
 			router.NewRoute("/fetch-model", http.MethodPost).
 				Handle(fetchModel),
+		).
+		AddRoute(
+			router.NewRoute("/test", http.MethodPost).
+				Handle(testChannel),
 		)
 	router.NewGroupRouter("/api/v1/channel").
 		Use(middleware.Auth()).
@@ -203,6 +208,38 @@ func fetchModel(c *gin.Context) {
 		return
 	}
 	resp.Success(c, models)
+}
+
+// testChannel 使用渠道当前（或表单草稿）配置向上游发送一条极小非流式请求。
+// 测试失败仍返回 HTTP 200，由 data.success/data.error 表达结果，
+// 前端据此展示详细状态而非抛出统一接口错误。
+func testChannel(c *gin.Context) {
+	var channel model.Channel
+	if err := c.ShouldBindJSON(&channel); err != nil {
+		resp.InvalidJSON(c)
+		return
+	}
+	if channel.ProxyMode == "" {
+		channel.ProxyMode = model.ProxyUsageModeDirect
+	}
+	if err := channel.ProxyMode.Validate(false); err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if channel.ProxyMode == model.ProxyUsageModePool {
+		if channel.ProxyConfigID == nil || *channel.ProxyConfigID <= 0 {
+			resp.Error(c, http.StatusBadRequest, "proxy config id is required when proxy mode is pool")
+			return
+		}
+		if _, err := op.ProxyURLForConfig(*channel.ProxyConfigID, c.Request.Context()); err != nil {
+			resp.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else {
+		channel.ProxyConfigID = nil
+	}
+	result := channeltest.Run(c.Request.Context(), &channel)
+	resp.Success(c, result)
 }
 
 func syncChannel(c *gin.Context) {

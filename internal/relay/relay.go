@@ -209,10 +209,15 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type for auto detection: %d", channel.Type))
 			continue
 		}
+		// 调度策略豁免：不检查熔断冷却、不记录健康/降权样本，
+		// 偶发错误交给客户端等待与重试，渠道不会因瞬时高负载被冷却或禁用。
+		schedulingExempt := channel.SchedulingExempt
 		// 渠道级熔断：整渠道熔断时跳过（粒度高于 key 级熔断，渠道整体故障快速摘除）
-		if tripped, remaining := balancer.IsChannelTripped(channel.ID); tripped {
-			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("channel circuit breaker tripped, remaining cooldown: %ds", int(remaining.Seconds())))
-			continue
+		if !schedulingExempt {
+			if tripped, remaining := balancer.IsChannelTripped(channel.ID); tripped {
+				iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("channel circuit breaker tripped, remaining cooldown: %ds", int(remaining.Seconds())))
+				continue
+			}
 		}
 		if responsesPassthroughRequired {
 			if resolvedType == outbound.OutboundTypeOpenAIResponse {
@@ -262,7 +267,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			if usedKey.ChannelKey == "" {
 				break
 			}
-			if !iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
+			if schedulingExempt || !iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
 				break
 			}
 			selectOpts.ExcludeKeyIDs[usedKey.ID] = struct{}{}
@@ -314,8 +319,15 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			}
 		}
 
-		// 同通道重试耗尽后记录熔断器失败
+		// 同通道重试耗尽后记录熔断器失败。
+		// 调度豁免渠道不写任何调度惩罚状态：不记熔断、不计 AutoRank 失败样本、
+		// 不进离群窗口、不学习托管路由，避免唯一/少数渠道被瞬时错误冷却或禁用。
 		if !result.Success && !result.Written && !result.Canceled && !result.ResetConversation {
+			if schedulingExempt {
+				lastErr = result.Err
+				lastResult = result
+				continue
+			}
 			failureKind := circuitFailureKind(group.RetryEnabled, result.StatusCode)
 			balancer.RecordFailure(channel.ID, usedKey.ID, internalRequest.Model, failureKind)
 			outlierwindow.Report(channel.ID, false, result.StatusCode, time.Now())
@@ -334,17 +346,21 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		}
 
 		if result.Success {
-			outlierwindow.Report(channel.ID, true, result.StatusCode, time.Now())
-			durationMS, ttfbMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
-			recordAutoRankResult(group, channel.ID, internalRequest.Model, true, result.StatusCode, durationMS, ttfbMS)
+			// 成功始终清除渠道级熔断残留：调度豁免渠道也会清掉开启豁免前
+			// 遗留的旧熔断状态，避免关闭豁免后旧状态立即生效。
 			balancer.RecordChannelSuccess(channel.ID)
+			if !schedulingExempt {
+				outlierwindow.Report(channel.ID, true, result.StatusCode, time.Now())
+				durationMS, ttfbMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
+				recordAutoRankResult(group, channel.ID, internalRequest.Model, true, result.StatusCode, durationMS, ttfbMS)
 
-			// ===== 质量失败检测 =====
-			// HTTP 成功但输出异常（工具循环中被上游提前终止，如中转站返回
-			// 极短输出 end_turn）：记 AutoRank 失败样本 + key 级冷却，使后续
-			// 请求无感切换到其他渠道。不影响已下发的成功响应。
-			if outputTokens := metrics.Stats.OutputToken; isQualityFailureResponse(internalRequest, outputTokens) {
-				recordQualityFailure(group, channel.ID, usedKey.ID, internalRequest.Model, outputTokens, durationMS, ttfbMS)
+				// ===== 质量失败检测 =====
+				// HTTP 成功但输出异常（工具循环中被上游提前终止，如中转站返回
+				// 极短输出 end_turn）：记 AutoRank 失败样本 + key 级冷却，使后续
+				// 请求无感切换到其他渠道。不影响已下发的成功响应。
+				if outputTokens := metrics.Stats.OutputToken; isQualityFailureResponse(internalRequest, outputTokens) {
+					recordQualityFailure(group, channel.ID, usedKey.ID, internalRequest.Model, outputTokens, durationMS, ttfbMS)
+				}
 			}
 
 			// === HTTP Replay 状态保存 ===
@@ -395,7 +411,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			// 慢取消惩罚：客户端超时取消且未写任何字节（上游长时间无首 token）——
 			// 记熔断失败 + AutoRank 失败样本，使该渠道被排挤，后续请求无感走其他渠道。
 			// 快速取消（用户主动停止）不惩罚，避免误伤。
-			if !result.Written && slowCancelPenaltySec() > 0 && result.DurationMS > slowCancelPenaltySec()*1000 {
+			if !schedulingExempt && !result.Written && slowCancelPenaltySec() > 0 && result.DurationMS > slowCancelPenaltySec()*1000 {
 				balancer.RecordFailure(channel.ID, usedKey.ID, internalRequest.Model, balancer.FailureHard)
 				slowDurationMS, slowTTFBMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
 				recordAutoRankResult(group, channel.ID, internalRequest.Model, false, 0, slowDurationMS, slowTTFBMS)
@@ -570,6 +586,9 @@ func (req *relayRequest) fallbackAttempt(item dbmodel.GroupItem, group dbmodel.G
 	startedAt := time.Now()
 	result := ra.attempt()
 	durationMS, ttfbMS := autoRankCandidateTimings(startedAt, startedAt, result)
+	if channel.SchedulingExempt {
+		return result, true
+	}
 	if !result.Success && !result.Written && !result.Canceled && !result.ResetConversation {
 		failureKind := circuitFailureKind(group.RetryEnabled, result.StatusCode)
 		balancer.RecordFailure(channel.ID, usedKey.ID, req.internalRequest.Model, failureKind)

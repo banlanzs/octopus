@@ -85,14 +85,19 @@ type Channel struct {
 	// 甚至会将其判定为异常流量，须由用户确认该渠道可接受探测后再显式开启。
 	// 只约束自动探测，不影响用户手动触发的分组健康检查。
 	ProbeEnabled bool `json:"probe_enabled" gorm:"default:false"`
+	// SchedulingExempt 调度策略豁免：开启后该渠道不参与熔断冷却、AutoRank
+	// 失败降权、被动离群退役（POR）等自动调度惩罚，仍保留人工启停控制。
+	// 适用于只配置少数渠道、偶发错误可通过客户端等待/重试恢复的场景，
+	// 避免正常渠道因瞬时高负载错误被自动冷却或禁用。
+	SchedulingExempt bool `json:"scheduling_exempt" gorm:"default:false"`
 	// PriceMultiplier 渠道计费倍率。最终单价 = 模型价格 × 倍率。
 	// 默认 1；0 视为 1（兼容旧数据未设置）。
-	PriceMultiplier       float64 `json:"price_multiplier" gorm:"default:1;not null"`
-	ChannelProxy          *string `json:"-" gorm:"column:channel_proxy"`
-	Stats         *StatsChannel         `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
-	MatchRegex    *string               `json:"match_regex"`
-	Managed       bool                  `json:"managed" gorm:"-"`
-	ManagedSource *ManagedChannelSource `json:"managed_source,omitempty" gorm:"-"`
+	PriceMultiplier float64               `json:"price_multiplier" gorm:"default:1;not null"`
+	ChannelProxy    *string               `json:"-" gorm:"column:channel_proxy"`
+	Stats           *StatsChannel         `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
+	MatchRegex      *string               `json:"match_regex"`
+	Managed         bool                  `json:"managed" gorm:"-"`
+	ManagedSource   *ManagedChannelSource `json:"managed_source,omitempty" gorm:"-"`
 }
 
 func (c *Channel) UnmarshalJSON(data []byte) error {
@@ -170,6 +175,8 @@ type ChannelUpdateRequest struct {
 	ForceDeepSeekThinking *bool `json:"force_deep_seek_thinking,omitempty"`
 	// ProbeEnabled 是否允许系统自动向该渠道发起探测请求（AutoRank 主动补样本）。
 	ProbeEnabled *bool `json:"probe_enabled,omitempty"`
+	// SchedulingExempt 调度策略豁免：不参与熔断/AutoRank/POR 等自动调度惩罚。
+	SchedulingExempt *bool `json:"scheduling_exempt,omitempty"`
 	// PriceMultiplier 渠道计费倍率。最终单价 = 模型价格 × 倍率。
 	PriceMultiplier *float64 `json:"price_multiplier,omitempty"`
 

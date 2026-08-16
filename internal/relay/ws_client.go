@@ -506,6 +506,7 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 			req.iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
 			continue
 		}
+		schedulingExempt := channel.SchedulingExempt
 
 		outAdapter := outbound.Get(channel.Type)
 		if outAdapter == nil {
@@ -531,7 +532,7 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 			if usedKey.ChannelKey == "" {
 				break
 			}
-			if !req.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
+			if schedulingExempt || !req.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
 				break
 			}
 			selectOpts.ExcludeKeyIDs[usedKey.ID] = struct{}{}
@@ -584,6 +585,11 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 		}
 
 		if !result.Success && !result.Written && !result.Canceled && !result.ResetConversation {
+			if schedulingExempt {
+				lastErr = result.Err
+				lastResult = result
+				continue
+			}
 			failureKind := circuitFailureKind(group.RetryEnabled, result.StatusCode)
 			if replayExact && result.StatusCode == http.StatusServiceUnavailable && isNoAvailableAccountError(relayErrorMessage(result.Err)) {
 				failureKind = balancer.FailureHard
@@ -594,8 +600,10 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 		}
 
 		if result.Success {
-			durationMS, ttfbMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
-			recordAutoRankResult(*group, channel.ID, item.ModelName, true, result.StatusCode, durationMS, ttfbMS)
+			if !schedulingExempt {
+				durationMS, ttfbMS := autoRankCandidateTimings(candidateStartedAt, finalAttemptStartedAt, result)
+				recordAutoRankResult(*group, channel.ID, item.ModelName, true, result.StatusCode, durationMS, ttfbMS)
+			}
 			var respID string
 			if req.metrics.InternalResponse != nil {
 				respID = req.metrics.InternalResponse.ID

@@ -1,4 +1,4 @@
-import { ChannelType, type AutoGroupType, type Channel, type ChannelWSMode, useFetchModel } from '@/api/endpoints/channel';
+import { ChannelType, type AutoGroupType, type Channel, type ChannelTestResult, type ChannelWSMode, useFetchModel, useTestChannel } from '@/api/endpoints/channel';
 import { ProxySelector } from '@/components/modules/proxy-pool/ProxySelector';
 import {
     Select,
@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/common/Toast';
 import { useTranslations } from 'next-intl';
 import { useEffect, useRef, useState } from 'react';
-import { RefreshCw, X, Plus } from 'lucide-react';
+import { RefreshCw, X, Plus, FlaskConical, Loader2 } from 'lucide-react';
 
 export interface ChannelKeyFormItem {
     id?: number;
@@ -42,6 +42,7 @@ export interface ChannelFormData {
     auto_sync: boolean;
     force_deep_seek_thinking: boolean;
     probe_enabled: boolean;
+    scheduling_exempt: boolean;
     auto_group: AutoGroupType;
     match_regex: string;
 }
@@ -115,9 +116,18 @@ export function ChannelForm({
     const inputRef = useRef<HTMLInputElement>(null);
 
     const fetchModel = useFetchModel();
+    const testChannel = useTestChannel();
+    const [testResult, setTestResult] = useState<ChannelTestResult | null>(null);
 
     const effectiveKey =
         formData.keys.find((k) => k.enabled && k.channel_key.trim())?.channel_key.trim() || '';
+
+    const selectedModels = [...autoModels, ...customModels].filter(Boolean);
+    const canTest = Boolean(
+        formData.base_urls?.[0]?.url.trim() &&
+        effectiveKey &&
+        selectedModels.length > 0,
+    );
 
     const updateModels = (nextAuto: string[], nextCustom: string[]) => {
         const model = nextAuto.join(',');
@@ -164,6 +174,46 @@ export function ChannelForm({
             updateModels(autoModels, [...customModels, trimmedModel]);
         }
         setInputValue('');
+    };
+
+    const handleTest = () => {
+        if (!canTest) return;
+        setTestResult(null);
+        testChannel.mutate(
+            {
+                type: formData.type,
+                base_urls: (formData.base_urls ?? []).filter((u) => u.url.trim()).map((u) => ({
+                    url: u.url.trim(),
+                    delay: Number(u.delay || 0),
+                })),
+                keys: (formData.keys ?? [])
+                    .filter((k) => k.channel_key.trim())
+                    .map((k) => ({ enabled: k.enabled, channel_key: k.channel_key.trim() })),
+                proxy_mode: formData.proxy_mode,
+                proxy_config_id: formData.proxy_mode === 'pool' ? formData.proxy_config_id : null,
+                custom_header: (formData.custom_header ?? []).filter((h) => h.header_key.trim()),
+                param_override: formData.param_override.trim() || null,
+                model: autoModels[0] ?? customModels[0] ?? '',
+                custom_model: formData.custom_model,
+                force_deep_seek_thinking: formData.force_deep_seek_thinking,
+            },
+            {
+                onSuccess: (result) => {
+                    setTestResult(result);
+                },
+                onError: (error) => {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    setTestResult({
+                        success: false,
+                        status_code: 0,
+                        duration_ms: 0,
+                        model: autoModels[0] ?? customModels[0] ?? '',
+                        protocol: '',
+                        error: errorMessage,
+                    });
+                },
+            },
+        );
     };
 
     const handleRemoveAutoModel = (model: string) => {
@@ -378,19 +428,35 @@ export function ChannelForm({
             </div>
 
             <div className="space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                     <label className="text-sm font-medium text-card-foreground">{t('model')}</label>
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleRefreshModels}
-                        disabled={!formData.base_urls?.[0]?.url || !effectiveKey || fetchModel.isPending}
-                        className="h-6 px-2 text-xs text-muted-foreground/50 hover:text-muted-foreground hover:bg-transparent"
-                    >
-                        <RefreshCw className={`h-3 w-3 mr-1 ${fetchModel.isPending ? 'animate-spin' : ''}`} />
-                        {t('modelRefresh')}
-                    </Button>
+                    <div className="flex items-center gap-1">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleTest}
+                            disabled={!canTest || testChannel.isPending}
+                            title={canTest ? t('testHint') : t('testDisabledHint')}
+                            className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent disabled:opacity-50"
+                        >
+                            {testChannel.isPending
+                                ? <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                : <FlaskConical className="h-3 w-3 mr-1" />}
+                            {testChannel.isPending ? t('testing') : t('test')}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleRefreshModels}
+                            disabled={!formData.base_urls?.[0]?.url || !effectiveKey || fetchModel.isPending}
+                            className="h-6 px-2 text-xs text-muted-foreground/50 hover:text-muted-foreground hover:bg-transparent"
+                        >
+                            <RefreshCw className={`h-3 w-3 mr-1 ${fetchModel.isPending ? 'animate-spin' : ''}`} />
+                            {t('modelRefresh')}
+                        </Button>
+                    </div>
                 </div>
                 <input type="hidden" value={formData.model} required />
 
@@ -626,6 +692,13 @@ export function ChannelForm({
                         />
                         <span className="text-sm text-card-foreground">{t('probeEnabled')}</span>
                     </label>
+                    <label className="flex items-center gap-2 cursor-pointer" title={t('schedulingExemptHint')}>
+                        <Switch
+                            checked={formData.scheduling_exempt}
+                            onCheckedChange={(checked) => onFormDataChange({ ...formData, scheduling_exempt: checked })}
+                        />
+                        <span className="text-sm text-card-foreground">{t('schedulingExempt')}</span>
+                    </label>
                 </div>
             </div>
 
@@ -648,6 +721,53 @@ export function ChannelForm({
                     {isPending ? pendingText : submitText}
                 </Button>
             </div>
+
+            {testResult ? (
+                <div
+                    className={`rounded-xl border p-4 space-y-2 ${
+                        testResult.success
+                            ? 'border-emerald-500/30 bg-emerald-500/5'
+                            : 'border-destructive/30 bg-destructive/5'
+                    }`}
+                >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className={`text-sm font-semibold ${testResult.success ? 'text-emerald-700 dark:text-emerald-400' : 'text-destructive'}`}>
+                            {testResult.success ? t('testSuccess') : t('testFailed')}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                            {testResult.status_code > 0 ? `HTTP ${testResult.status_code}` : ''}
+                            {testResult.duration_ms > 0 ? ` · ${testResult.duration_ms}ms` : ''}
+                        </span>
+                    </div>
+                    {testResult.model ? (
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                            <span>{t('testModel')}: {testResult.model}</span>
+                            {testResult.protocol ? <span>{t('testProtocol')}: {testResult.protocol}</span> : null}
+                        </div>
+                    ) : null}
+                    {testResult.success && testResult.output ? (
+                        <div className="space-y-1">
+                            <div className="text-xs font-medium text-muted-foreground">{t('testOutput')}</div>
+                            <pre className="whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs text-card-foreground max-h-40 overflow-y-auto">
+                                {testResult.output}
+                            </pre>
+                        </div>
+                    ) : null}
+                    {!testResult.success && testResult.error ? (
+                        <div className="space-y-1">
+                            <div className="text-xs font-medium text-muted-foreground">{t('testError')}</div>
+                            <pre className="whitespace-pre-wrap break-words rounded-lg bg-destructive/5 p-3 text-xs text-destructive max-h-40 overflow-y-auto">
+                                {testResult.error}
+                            </pre>
+                        </div>
+                    ) : null}
+                    {testResult.usage ? (
+                        <div className="text-xs text-muted-foreground">
+                            {t('testUsage')}: {testResult.usage.prompt_tokens} / {testResult.usage.completion_tokens} / {testResult.usage.total_tokens}
+                        </div>
+                    ) : null}
+                </div>
+            ) : null}
         </form>
     );
 }
