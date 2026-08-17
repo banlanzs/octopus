@@ -77,7 +77,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 	apiKeyID := c.GetInt("api_key_id")
 
 	// 获取通道分组
-	group, err := groupForAPIKeyRequest(requestModel, c.GetString("supported_channels"), c.Request.Context())
+	group, directRoute, err := groupForAPIKeyRequest(requestModel, c.GetString("supported_channels"), c.Request.Context())
 	if err != nil {
 		resp.ErrorWithCode(c, http.StatusNotFound, CodeRelayModelNotFound, "model not found")
 		return
@@ -203,8 +203,15 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			continue
 		}
 		// 协议自动检测：auto 渠道按客户端请求协议解析实际出站协议；
-		// 非 auto 渠道原样返回（权威声明）。无法解析则跳过该渠道。
-		resolvedType, ok := outbound.ResolveOutboundType(channel.Type, internalRequest.RawAPIFormat)
+		// 非 auto 渠道原样返回（权威声明）。渠道配置构造的临时路由
+		// （directRoute）同样按客户端请求格式解析。无法解析则跳过该渠道。
+		var resolvedType outbound.OutboundType
+		var ok bool
+		if directRoute {
+			resolvedType, ok = outbound.ResolveOutboundType(outbound.OutboundTypeAuto, internalRequest.RawAPIFormat)
+		} else {
+			resolvedType, ok = outbound.ResolveOutboundType(channel.Type, internalRequest.RawAPIFormat)
+		}
 		if !ok {
 			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type for auto detection: %d", channel.Type))
 			continue

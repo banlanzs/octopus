@@ -326,7 +326,7 @@ func bestEffortWarmupUpstreamWS(
 		}
 	}
 
-	group, err := groupForAPIKeyRequest(requestModel, supportedChannels, ctx)
+	group, _, err := groupForAPIKeyRequest(requestModel, supportedChannels, ctx)
 	if err != nil {
 		return fmt.Errorf("model not found")
 	}
@@ -422,7 +422,7 @@ func newWSRelayRequest(
 	rawBody []byte,
 	supportedChannels string,
 ) (*relayRequest, *dbmodel.Group, error) {
-	group, err := groupForAPIKeyRequest(requestModel, supportedChannels, ctx)
+	group, _, err := groupForAPIKeyRequest(requestModel, supportedChannels, ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("model not found")
 	}

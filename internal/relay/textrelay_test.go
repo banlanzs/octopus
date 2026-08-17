@@ -860,3 +860,49 @@ func TestTextHandlerRoutesChannelModelWithoutGroupForRestrictedKey(t *testing.T)
 		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestTextHandlerDirectRoutePrefersClientResponseFormat(t *testing.T) {
+	clearProtocolCapabilityCache(t)
+
+	if dbpkg.GetDB() != nil {
+		_ = dbpkg.Close()
+	}
+	dbPath := filepath.Join(t.TempDir(), "textrelay-direct-client-format.db")
+	if err := dbpkg.InitDB("sqlite", dbPath, false); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbpkg.Close() })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
+			t.Errorf("upstream path = %s, want /responses", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_direct","object":"response","model":"codex-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14}}`))
+	}))
+	defer upstream.Close()
+
+	ctx := context.Background()
+	// 渠道声明为 OpenAI Chat，但临时直连路由应优先按客户端 responses 格式转发。
+	channel := &model.Channel{
+		Name:     "textrelay-codex-channel",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: upstream.URL}},
+		Model:    "codex-model",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "codex-key"}},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/responses",
+		`{"model":"codex-model","input":"hi"}`)
+	c.Set("supported_channels", fmt.Sprintf("%d", channel.ID))
+
+	TextHandler(llm.APIFormatOpenAIResponse, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+}

@@ -74,7 +74,7 @@ func HandleResponsesCompact(c *gin.Context) {
 	requestModel := compactReq.Model
 	apiKeyID := c.GetInt("api_key_id")
 
-	group, err := groupForAPIKeyRequest(requestModel, c.GetString("supported_channels"), c.Request.Context())
+	group, _, err := groupForAPIKeyRequest(requestModel, c.GetString("supported_channels"), c.Request.Context())
 	if err != nil {
 		resp.ErrorWithCode(c, http.StatusNotFound, CodeRelayModelNotFound, "model not found")
 		return

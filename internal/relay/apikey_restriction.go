@@ -77,19 +77,21 @@ func fallbackGroupForAPIKeyChannels(requestModel, supportedChannels string, ctx 
 // groupForAPIKeyRequest 解析请求模型对应的可用分组：
 // 优先使用已有分组并应用渠道白名单；分组不存在或无白名单条目时，
 // 再回退到渠道配置的模型路由。
-func groupForAPIKeyRequest(requestModel, supportedChannels string, ctx context.Context) (dbmodel.Group, error) {
+// direct 为 true 表示使用渠道配置构造的临时路由，此时转发应优先按
+// 客户端请求格式选择上游协议，而不是渠道声明的固定类型。
+func groupForAPIKeyRequest(requestModel, supportedChannels string, ctx context.Context) (dbmodel.Group, bool, error) {
 	group, err := op.GroupGetEnabledMap(requestModel, ctx)
 	if err == nil {
 		group = restrictGroupChannels(group, supportedChannels)
 		if len(group.Items) > 0 {
-			return group, nil
+			return group, false, nil
 		}
 	}
 	if fallback, ok := fallbackGroupForAPIKeyChannels(requestModel, supportedChannels, ctx); ok {
-		return fallback, nil
+		return fallback, true, nil
 	}
 	if err != nil {
-		return dbmodel.Group{}, err
+		return dbmodel.Group{}, false, err
 	}
-	return group, nil
+	return group, false, nil
 }

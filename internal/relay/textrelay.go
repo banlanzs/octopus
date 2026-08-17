@@ -74,7 +74,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	}
 
 	// 分组与迭代器（选通道），与现有 relay 保持一致。
-	group, err := groupForAPIKeyRequest(llmReq.Model, c.GetString("supported_channels"), ctx)
+	group, directRoute, err := groupForAPIKeyRequest(llmReq.Model, c.GetString("supported_channels"), ctx)
 	if err != nil {
 		resp.Error(c, http.StatusNotFound, "model not found")
 		return
@@ -128,7 +128,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		// 缺失」（400 / 403-CF 拦截页 / 404 非模型不可用 / 405）时按固定链换
 		// 协议重试；responses/embedding 请求族为单候选，不做转换。非 auto
 		// 渠道候选只有声明的协议本身，行为与改造前完全一致。
-		autoChannel := outbound.IsAutoType(channel.Type)
+		autoChannel := directRoute || outbound.IsAutoType(channel.Type)
 		clientProto := ""
 		var candidates []outbound.OutboundType
 		if autoChannel {
@@ -138,7 +138,13 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				iter.Skip(channel.ID, 0, channel.Name, "unsupported client protocol for auto channel")
 				continue
 			}
-			candidates = protocolCandidates(channel.Type, clientProto, channel.ID, channel.GetBaseUrl())
+			detectionType := channel.Type
+			if directRoute {
+				// 渠道配置构造的临时路由：优先按客户端请求格式探测上游协议，
+				// 而不是渠道声明类型（例如 Codex 的 responses 请求应发 /responses）。
+				detectionType = outbound.OutboundTypeAuto
+			}
+			candidates = protocolCandidates(detectionType, clientProto, channel.ID, channel.GetBaseUrl())
 			if len(candidates) == 0 {
 				iter.Skip(channel.ID, 0, channel.Name, "protocol unsupported (cached)")
 				continue
