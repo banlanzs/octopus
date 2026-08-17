@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 文本路径协议保真：对齐 axonhub pipeline 的 header 合并与 Responses 同格式直通
+
+- **问题**：Codex 客户端经 `/v1/responses` 转发时，`Originator` / `Session-Id` / `X-Codex-*` 等协商头被丢弃，上游将网关识别为“套了网关”并返回 401（客户端看到 502）。
+- **修复**：`TextHandler` 对齐 axonhub `pipeline.processRequest`：入站后挂载 `llmReq.RawRequest`，出站前执行 `httpclient.MergeInboundRequest` → `httpclient.FinalizeAuthHeaders` → 渠道参数/自定义 header；跨协议转换路径同样生效。
+- **Responses 同格式直通**：新增 OpenAI Responses→Responses raw 直通，保留 Codex 扩展字段（`additional_tools`、`client_metadata` 等），仅重写顶层 `model`；流式 SSE 事件原样直通并 sidecar 聚合 usage。
+
+
 ### 移除分组健康检查（结果仅供展示，无调度用途）
 
 - **移除后端**：`internal/grouphealth` 的 Service 编排、`op/group_health.go` repository、`model/group_health.go` 模型、`handlers/group_health.go` HTTP 接口（`/api/v1/group/health/*`），以及建表迁移 `migrate/010.go`、`group_health_probe_mode.go` 与 `SettingKeyGroupHealthEnabled` 设置项。

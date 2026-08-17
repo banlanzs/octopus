@@ -25,7 +25,24 @@ import (
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/streams"
 	"github.com/looplj/axonhub/llm/transformer"
+	axanthropic "github.com/looplj/axonhub/llm/transformer/anthropic"
 )
+
+// relayLogReasoningEffort 返回写入 RelayLog 的推理强度。
+// axonhub 的 Anthropic inbound 为了兼容下游协议会把 output_config.effort=max
+// 归一化为 reasoning_effort=xhigh；日志展示应以客户端原始 wire 值为准，
+// 避免详情中的 max 与卡片 badge 的 xhigh 不一致。
+func relayLogReasoningEffort(req *llm.Request) string {
+	if req == nil {
+		return ""
+	}
+	if v, ok := req.TransformerMetadata[axanthropic.TransformerMetadataKeyOutputConfigEffort]; ok {
+		if effort, ok := v.(string); ok && strings.TrimSpace(effort) != "" {
+			return effort
+		}
+	}
+	return req.ReasoningEffort
+}
 
 // TextHandler 是文本 API 转换迁移的转发入口：
 // 使用 axonhub 的 inbound/outbound transformer 完成协议转换，复用本地
@@ -59,6 +76,11 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, "empty transformed request")
 		return
 	}
+
+	// 与 axonhub pipeline.Process 对齐：把客户端原始请求挂到统一请求上。
+	// 出站 transformer（如 responses lite 检测、Claude Code / Codex 特化）依赖
+	// RawRequest 读取客户端原始 header/body；透传合并也以此为准。
+	llmReq.RawRequest = httpReq
 
 	// APIKey 模型白名单校验（与旧 relay 一致）。
 	if supportedModels := c.GetString("supported_models"); supportedModels != "" {
@@ -97,7 +119,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	// 文本迁移路径同样记录客户端原始请求头与推理强度：
 	// 请求头用于日志详情页「请求头/请求体」分开展示，推理强度用于卡片 badge。
 	metrics.RequestHeaders = serializeRequestHeadersForLog(c.Request.Header)
-	metrics.ReasoningEffort = llmReq.ReasoningEffort
+	metrics.ReasoningEffort = relayLogReasoningEffort(llmReq)
 
 	var lastErr error
 	for iter.Next() {
@@ -295,6 +317,105 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 					return
 				}
 
+				// 同格式直通（openai responses → openai responses）：保留 Codex 客户端
+				// 原始请求字节与协商头，避免上游将网关识别为非官方客户端。
+				if isOpenAIResponsesPassthrough(format, channelType) {
+					outReq, err := buildResponsesPassthroughRequest(ctx, httpReq, channel, usedKey, item.ModelName, isStream)
+					if err != nil {
+						lastAttemptErr = err
+						break
+					}
+
+					nativeClient, err := helper.ChannelHTTPClientWithContext(ctx, channel)
+					if err != nil {
+						lastAttemptErr = err
+						break
+					}
+					httpClient := httpclient.NewHttpClientWithClient(nativeClient)
+
+					span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
+					lastSpan = span
+
+					if isStream {
+						usage, perr := passthroughResponsesStream(ctx, httpClient, inAdapter, outReq, c, time.Duration(group.FirstTokenTimeOut)*time.Second, streamHeartbeatInterval())
+						if perr != nil {
+							sc := axonErrorStatusCode(perr)
+							if autoChannel {
+								if extracted := extractUpstreamStatusCode(perr); extracted != 0 {
+									sc = extracted
+								}
+								if ShouldFallbackProtocol(sc, perr.Error(), false) {
+									span.End(dbmodel.AttemptFailed, sc, perr.Error())
+									lastStatusCode = sc
+									lastAttemptErr = perr
+									capMissing = true
+									break
+								}
+							}
+							span.End(dbmodel.AttemptFailed, sc, perr.Error())
+							recordAxonAttemptFailure(channel, usedKey, span, sc)
+							lastStatusCode = sc
+							lastAttemptErr = perr
+							if errors.Is(perr, errAxonFirstTokenTimeout) || !isRetryableStatus(sc) {
+								break
+							}
+							continue
+						}
+						span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
+						if usage != nil {
+							metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: item.ModelName}, item.ModelName, channel.ID)
+						} else {
+							metrics.ActualModel = item.ModelName
+						}
+						recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
+						if autoChannel {
+							rememberProtocolCapability(channel.ID, channel.GetBaseUrl(), clientProto, candidate)
+						}
+						metrics.Save(ctx, true, nil, iter.Attempts())
+						return
+					}
+
+					sc, llmResp, perr := passthroughResponsesNonStream(ctx, httpClient, outAdapter, outReq, c)
+					if perr != nil {
+						if autoChannel && ShouldFallbackProtocol(sc, perr.Error(), false) {
+							span.End(dbmodel.AttemptFailed, sc, perr.Error())
+							lastStatusCode = sc
+							lastAttemptErr = perr
+							capMissing = true
+							break
+						}
+						span.End(dbmodel.AttemptFailed, sc, perr.Error())
+						recordAxonAttemptFailure(channel, usedKey, span, sc)
+						lastStatusCode = sc
+						lastAttemptErr = perr
+						if !isRetryableStatus(sc) {
+							break
+						}
+						continue
+					}
+					span.End(dbmodel.AttemptSuccess, sc, "")
+					if llmResp != nil {
+						metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
+					} else {
+						metrics.ActualModel = item.ModelName
+					}
+					recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, sc)
+
+					if format == llm.APIFormatOpenAIResponse && llmResp != nil && llmResp.ID != "" {
+						storeTextRelayReplaySticky(llmResp.ID, channel.ID, usedKey.ID)
+					}
+					if llmResp != nil && llmResp.Usage != nil && !schedulingExempt {
+						if outputTokens := llmResp.Usage.CompletionTokens; isQualityFailureResponseAxon(llmReq, outputTokens) {
+							recordQualityFailure(group, channel.ID, usedKey.ID, item.ModelName, outputTokens, span.Duration().Milliseconds(), 0)
+						}
+					}
+					if autoChannel {
+						rememberProtocolCapability(channel.ID, channel.GetBaseUrl(), clientProto, candidate)
+					}
+					metrics.Save(ctx, true, nil, iter.Attempts())
+					return
+				}
+
 				// 每次尝试都把统一请求的模型名改为本次候选的上游模型。
 				llmReq.Model = item.ModelName
 
@@ -309,8 +430,14 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 					}
 					break
 				}
-				// 渠道级请求定制：参数覆盖（仅 JSON body）+ 自定义 header（敏感头保持转换器已写优先）。
-				applyAxonChannelOptions(channel, outReq)
+				// 对齐 axonhub pipeline：合并客户端原始 header/query，固化鉴权，
+				// 再应用渠道级参数覆盖与自定义 header。Codex Responses 等客户端
+				// 的协商头在此步骤透传到上游，避免被识别为“套了网关”。
+				outReq, err = prepareAxonOutboundRequest(outReq, httpReq, channel)
+				if err != nil {
+					lastAttemptErr = err
+					break
+				}
 				// 火山（volcengine）渠道：在 responses outbound 之上补齐火山 Responses 特化。
 				if channelType == axonadapter.ChannelTypeDoubao {
 					applyVolcengineCompensation(outReq, llmReq)
@@ -484,6 +611,29 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	}
 	metrics.Save(ctx, false, lastErr, iter.Attempts())
 	resp.Error(c, http.StatusBadGateway, lastErr.Error())
+}
+
+// prepareAxonOutboundRequest 对齐 axonhub pipeline.processRequest 的出站请求
+// 后处理顺序：合并客户端原始请求（过滤敏感/传输管理头）→ 固化鉴权头 →
+// 应用渠道参数覆盖与自定义 header。
+//
+// 这是文本路径协议保真的关键：Codex 的 Originator / Session-Id /
+// X-Codex-* 等协商头必须随出站请求一起发送，否则上游会把网关识别为
+// 非官方客户端并拒绝请求。
+func prepareAxonOutboundRequest(outReq, inReq *httpclient.Request, channel *dbmodel.Channel) (*httpclient.Request, error) {
+	if outReq == nil {
+		return nil, fmt.Errorf("outbound request is nil")
+	}
+	if outReq.Headers == nil {
+		outReq.Headers = make(http.Header)
+	}
+	outReq = httpclient.MergeInboundRequest(outReq, inReq)
+	outReq, err := httpclient.FinalizeAuthHeaders(outReq)
+	if err != nil {
+		return nil, err
+	}
+	applyAxonChannelOptions(channel, outReq)
+	return outReq, nil
 }
 
 // applyAxonChannelOptions 在出站请求上应用渠道级定制：参数覆盖 + 自定义 header。

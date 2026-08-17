@@ -200,6 +200,43 @@ func TestTextHandlerRecordsRelayLog(t *testing.T) {
 	}
 }
 
+func TestTextHandlerAnthropicMaxEffortLoggedAsClientValue(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_max_effort","type":"message","role":"assistant","model":"claude-opus-5-max-log","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeAnthropic, "claude-opus-5-max-log", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/messages",
+		`{"model":"claude-opus-5-max-log","max_tokens":64000,"thinking":{"type":"adaptive"},"output_config":{"effort":"max"},"messages":[{"role":"user","content":"hi"}]}`)
+
+	TextHandler(llm.APIFormatAnthropicMessage, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+
+	logs, err := op.RelayLogList(context.Background(), nil, nil, nil, 1, 10)
+	if err != nil {
+		t.Fatalf("RelayLogList failed: %v", err)
+	}
+	found := false
+	for _, l := range logs {
+		if l.RequestModelName != "claude-opus-5-max-log" {
+			continue
+		}
+		found = true
+		if l.ReasoningEffort != "max" {
+			t.Errorf("reasoning effort = %q, want max (client output_config.effort should win over normalized xhigh)", l.ReasoningEffort)
+		}
+	}
+	if !found {
+		t.Fatal("relay log for claude-opus-5-max-log not found")
+	}
+}
+
 func TestTextHandlerSameChannelRetry(t *testing.T) {
 	var attempts atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -446,6 +483,99 @@ func TestTextHandlerOpenAIResponsesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTextHandlerOpenAIResponsesPassthroughPreservesCodexRequest(t *testing.T) {
+	var capturedBody []byte
+	var capturedHeaders http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_codex","object":"response","model":"gpt-5.6-sol","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}`))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeOpenAIResponse, "gpt-5.6-sol", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/responses",
+		`{"model":"gpt-5.6-sol","input":[{"type":"additional_tools","role":"developer","tools":[]}],"client_metadata":{"codex":"true"}}`)
+	c.Request.Header.Set("Authorization", "Bearer client-secret")
+	c.Request.Header.Set("Originator", "codex-tui")
+	c.Request.Header.Set("Session-Id", "session-123")
+	c.Request.Header.Set("Thread-Id", "thread-123")
+	c.Request.Header.Set("X-Codex-Turn-Metadata", `{"turn":1}`)
+	c.Request.Header.Set("X-Codex-Window-Id", "window-123")
+	c.Request.Header.Set("X-Openai-Internal-Codex-Responses-Lite", "true")
+
+	TextHandler(llm.APIFormatOpenAIResponse, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	if got := capturedHeaders.Get("Authorization"); got != "Bearer test-key" {
+		t.Fatalf("upstream Authorization = %q, want channel key", got)
+	}
+	for _, header := range []string{"Originator", "Session-Id", "Thread-Id", "X-Codex-Turn-Metadata", "X-Codex-Window-Id", "X-Openai-Internal-Codex-Responses-Lite"} {
+		if got := capturedHeaders.Get(header); got == "" {
+			t.Errorf("upstream missing Codex header %s: %v", header, capturedHeaders)
+		}
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("decode upstream body: %v (body=%s)", err, capturedBody)
+	}
+	if _, ok := payload["client_metadata"]; !ok {
+		t.Fatalf("raw responses passthrough dropped client_metadata: %s", capturedBody)
+	}
+	items, _ := payload["input"].([]any)
+	if len(items) == 0 || items[0].(map[string]any)["type"] != "additional_tools" {
+		t.Fatalf("raw responses passthrough changed input item: %s", capturedBody)
+	}
+}
+
+func TestTextHandlerOpenAIResponsesPassthroughStreamPreservesRawEvents(t *testing.T) {
+	var capturedHeaders http.Header
+	var capturedBody []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream\",\"model\":\"gpt-5.6-sol\"}}\n\n"))
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream\",\"model\":\"gpt-5.6-sol\",\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"total_tokens\":4}}}\n\n"))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeOpenAIResponse, "gpt-5.6-sol", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/responses",
+		`{"model":"gpt-5.6-sol","input":"hi","stream":true,"client_metadata":{"codex":"true"}}`)
+	c.Request.Header.Set("Originator", "codex-tui")
+	c.Request.Header.Set("Session-Id", "session-stream")
+
+	TextHandler(llm.APIFormatOpenAIResponse, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	if got := capturedHeaders.Get("Originator"); got != "codex-tui" {
+		t.Fatalf("upstream Originator = %q, want codex-tui", got)
+	}
+	if got := capturedHeaders.Get("Accept"); got != "text/event-stream" {
+		t.Fatalf("upstream Accept = %q, want text/event-stream", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("decode upstream body: %v", err)
+	}
+	if _, ok := payload["client_metadata"]; !ok {
+		t.Fatalf("stream passthrough dropped client_metadata: %s", capturedBody)
+	}
+	if !strings.Contains(recorder.Body.String(), "event: response.created") ||
+		!strings.Contains(recorder.Body.String(), "event: response.completed") {
+		t.Fatalf("raw SSE events not preserved: %s", recorder.Body.String())
+	}
+}
+
 func TestTextHandlerOpenAIEmbeddingRoundTrip(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -509,6 +639,41 @@ func TestTextHandlerCrossProtocolOpenAIToAnthropic(t *testing.T) {
 	msg := choices[0].(map[string]any)["message"].(map[string]any)
 	if msg["content"] != "hello from anthropic" {
 		t.Fatalf("content = %v, want hello from anthropic", msg["content"])
+	}
+}
+
+func TestTextHandlerCrossProtocolForwardsCodexHeaders(t *testing.T) {
+	var capturedHeaders http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-codex","object":"chat.completion","model":"gpt-5.6-sol","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`))
+	}))
+	defer upstream.Close()
+
+	// 固定 OpenAI Chat 渠道：responses 入站必须走标准转换路径（非同格式直通）。
+	setupTextRelayTest(t, outbound.OutboundTypeOpenAIChat, "gpt-5.6-sol", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/responses",
+		`{"model":"gpt-5.6-sol","input":"hi"}`)
+	c.Request.Header.Set("Authorization", "Bearer client-secret")
+	c.Request.Header.Set("Originator", "codex-tui")
+	c.Request.Header.Set("Session-Id", "session-cross")
+	c.Request.Header.Set("Thread-Id", "thread-cross")
+	c.Request.Header.Set("X-Codex-Turn-Metadata", `{"turn":2}`)
+
+	TextHandler(llm.APIFormatOpenAIResponse, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	if got := capturedHeaders.Get("Authorization"); got != "Bearer test-key" {
+		t.Fatalf("upstream Authorization = %q, want channel key", got)
+	}
+	for _, header := range []string{"Originator", "Session-Id", "Thread-Id", "X-Codex-Turn-Metadata"} {
+		if got := capturedHeaders.Get(header); got == "" {
+			t.Errorf("upstream missing Codex header %s: %v", header, capturedHeaders)
+		}
 	}
 }
 

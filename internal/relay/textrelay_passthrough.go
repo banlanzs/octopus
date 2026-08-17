@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/helper"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
@@ -69,6 +70,83 @@ func applyVolcengineCompensation(outReq *httpclient.Request, llmReq *llm.Request
 // 直通保留客户端请求字节（仅改写 model），对 Anthropic prompt caching 至关重要。
 func isAnthropicPassthrough(format llm.APIFormat, channelType llm.APIFormat) bool {
 	return format == llm.APIFormatAnthropicMessage && channelType == llm.APIFormatAnthropicMessage
+}
+
+// isOpenAIResponsesPassthrough 判断是否可做 openai responses → openai responses
+// 同格式直通。Codex 客户端对 Responses 协议的扩展字段（additional_tools、
+// client_metadata、原生 tool_choice 等）无法被统一模型完全表示，同格式路径必须
+// 保留原始请求字节，仅重写顶层 model。
+func isOpenAIResponsesPassthrough(format llm.APIFormat, channelType llm.APIFormat) bool {
+	return format == llm.APIFormatOpenAIResponse && channelType == llm.APIFormatOpenAIResponse
+}
+
+// buildResponsesPassthroughRequest 构造 responses 直通出站请求。
+// 处理顺序与 axonhub pipeline.processRequest 对齐：
+// 生成器请求 → 合并客户端原始请求（Codex 协商头）→ 固化鉴权 → 渠道覆盖。
+func buildResponsesPassthroughRequest(ctx context.Context, inReq *httpclient.Request, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, modelName string, stream bool) (*httpclient.Request, error) {
+	if inReq == nil || len(inReq.Body) == 0 {
+		return nil, fmt.Errorf("raw request body is empty")
+	}
+
+	body, err := rewriteRawRequestModel(inReq.Body, modelName)
+	if err != nil {
+		return nil, err
+	}
+
+	outReq := &httpclient.Request{
+		Method:                http.MethodPost,
+		URL:                   strings.TrimSuffix(channel.GetBaseUrl(), "/") + "/responses",
+		Headers:               make(http.Header),
+		Body:                  body,
+		Auth:                  &httpclient.AuthConfig{Type: httpclient.AuthTypeBearer, APIKey: usedKey.ChannelKey},
+		APIFormat:             string(llm.APIFormatOpenAIResponse),
+		SkipInboundQueryMerge: true,
+	}
+	outReq.Headers.Set("Content-Type", "application/json")
+	if stream {
+		outReq.Headers.Set("Accept", "text/event-stream")
+	} else {
+		outReq.Headers.Set("Accept", "application/json")
+	}
+
+	outReq, err = prepareAxonOutboundRequest(outReq, inReq, channel)
+	if err != nil {
+		return nil, err
+	}
+
+	return outReq, nil
+}
+
+// passthroughResponsesNonStream 执行 responses 非流式直通：
+// 原始响应字节写回客户端，sidecar 用 responses outbound 解析 usage/metrics。
+func passthroughResponsesNonStream(ctx context.Context, httpClient *httpclient.HttpClient, outAdapter transformer.Outbound, outReq *httpclient.Request, c *gin.Context) (int, *llm.Response, error) {
+	resp, err := httpClient.Do(ctx, outReq)
+	if err != nil {
+		return axonErrorStatusCode(err), nil, err
+	}
+
+	contentType := resp.Headers.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	c.Data(http.StatusOK, contentType, resp.Body)
+
+	// sidecar：直通已经把字节写回客户端，这里再解析 usage 供 metrics。
+	llmResp, err := outAdapter.TransformResponse(ctx, resp)
+	if err != nil {
+		return resp.StatusCode, nil, nil
+	}
+	return resp.StatusCode, llmResp, nil
+}
+
+// passthroughResponsesStream 执行 responses 流式直通：
+// 上游 SSE 事件按原始类型/data 直接写回客户端，结束前 sidecar 聚合 usage。
+func passthroughResponsesStream(ctx context.Context, httpClient *httpclient.HttpClient, inAdapter transformer.Inbound, outReq *httpclient.Request, c *gin.Context, firstTokenTimeout, heartbeatInterval time.Duration) (*llm.Usage, error) {
+	stream, err := httpClient.DoStream(ctx, outReq)
+	if err != nil {
+		return nil, err
+	}
+	return writeAxonStream(c, stream, inAdapter, firstTokenTimeout, heartbeatInterval)
 }
 
 // buildPassthroughRequest 构造 anthropic 直通出站请求：字节改写 model + 参数覆盖 + 出站头。
