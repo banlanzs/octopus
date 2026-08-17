@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -12,7 +11,6 @@ import (
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
 	"github.com/gin-gonic/gin"
-	"github.com/samber/lo"
 )
 
 func init() {
@@ -64,24 +62,16 @@ func init() {
 }
 
 func getModelList(c *gin.Context) {
-	models, err := op.GroupListModel(c.Request.Context())
-	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
-		return
-	}
 	apiKeyId := c.GetInt("api_key_id")
 	apiKey, err := op.APIKeyGet(apiKeyId, c.Request.Context())
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if apiKey.SupportedModels != "" {
-		supportedModels := lo.Map(strings.Split(apiKey.SupportedModels, ","), func(s string, _ int) string {
-			return strings.TrimSpace(s)
-		})
-		models = lo.Filter(models, func(m string, _ int) bool {
-			return lo.Contains(supportedModels, m)
-		})
+	models, err := op.GroupListModelForAPIKey(apiKey, c.Request.Context())
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	if c.GetString("request_type") == "anthropic" {
@@ -219,7 +209,7 @@ func updateChannelModelPrice(c *gin.Context) {
 	var req struct {
 		ChannelID  int     `json:"channel_id" binding:"required"`
 		ModelName  string  `json:"model_name" binding:"required"`
-		Input       float64 `json:"input"`
+		Input      float64 `json:"input"`
 		Output     float64 `json:"output"`
 		CacheRead  float64 `json:"cache_read"`
 		CacheWrite float64 `json:"cache_write"`

@@ -1,9 +1,6 @@
 package relay
 
 import (
-	"strconv"
-	"strings"
-
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 )
 
@@ -12,23 +9,7 @@ import (
 // restricted 为 true 时即使 allowed 为空也保持白名单语义（无渠道可用），
 // 避免无效配置被误判为“不限渠道”。
 func parseSupportedChannelIDs(raw string) (allowed map[int]struct{}, restricted bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, false
-	}
-	allowed = make(map[int]struct{})
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		id, err := strconv.Atoi(part)
-		if err != nil || id <= 0 {
-			continue
-		}
-		allowed[id] = struct{}{}
-	}
-	return allowed, true
+	return dbmodel.APIKey{SupportedChannels: raw}.SupportedChannelIDSet()
 }
 
 // restrictGroupChannels 按 API Key 的渠道白名单过滤分组条目。

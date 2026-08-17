@@ -3,6 +3,8 @@ package op
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
@@ -28,6 +30,66 @@ func GroupListModel(ctx context.Context) ([]string, error) {
 		models = append(models, group.Name)
 	}
 	return models, nil
+}
+
+// GroupListModelByChannelIDs 返回至少存在一条启用分组路由、且目标渠道
+// 在 channelIDs 白名单内的模型名（模型名即分组名）。
+func GroupListModelByChannelIDs(channelIDs map[int]struct{}, ctx context.Context) ([]string, error) {
+	modelSet := make(map[string]struct{})
+	for _, group := range groupCache.GetAll() {
+		name := strings.TrimSpace(group.Name)
+		if name == "" {
+			continue
+		}
+		for _, item := range group.Items {
+			if _, ok := channelIDs[item.ChannelID]; !ok {
+				continue
+			}
+			if channel, ok := channelCache.Get(item.ChannelID); ok && channel.Enabled {
+				modelSet[name] = struct{}{}
+				break
+			}
+		}
+	}
+	models := make([]string, 0, len(modelSet))
+	for name := range modelSet {
+		models = append(models, name)
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
+// GroupListModelForAPIKey 返回 API Key 实际可调用的模型列表：
+// 先按渠道白名单收窄，再按模型白名单过滤，两个限制取交集。
+func GroupListModelForAPIKey(key model.APIKey, ctx context.Context) ([]string, error) {
+	var models []string
+	var err error
+	if channelIDs, restricted := key.SupportedChannelIDSet(); restricted {
+		models, err = GroupListModelByChannelIDs(channelIDs, ctx)
+	} else {
+		models, err = GroupListModel(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	supportedModels := strings.TrimSpace(key.SupportedModels)
+	if supportedModels == "" {
+		return models, nil
+	}
+	allowed := make(map[string]struct{})
+	for _, part := range strings.Split(supportedModels, ",") {
+		if name := strings.TrimSpace(part); name != "" {
+			allowed[name] = struct{}{}
+		}
+	}
+	filtered := make([]string, 0, len(models))
+	for _, name := range models {
+		if _, ok := allowed[name]; ok {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered, nil
 }
 
 func GroupGet(id int, ctx context.Context) (*model.Group, error) {
