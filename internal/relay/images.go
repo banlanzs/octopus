@@ -106,12 +106,11 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 	}
 
 	// 获取通道分组
-	group, err := op.GroupGetEnabledMap(requestModel, ctx)
+	group, err := groupForAPIKeyRequest(requestModel, c.GetString("supported_channels"), ctx)
 	if err != nil {
 		resp.ErrorWithCode(c, http.StatusNotFound, CodeRelayModelNotFound, "model not found")
 		return
 	}
-	group = restrictGroupChannels(group, c.GetString("supported_channels"))
 
 	// 创建迭代器（策略排序 + 粘性优先）
 	iter := balancer.NewIterator(group, apiKeyID, requestModel)

@@ -74,12 +74,11 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	}
 
 	// 分组与迭代器（选通道），与现有 relay 保持一致。
-	group, err := op.GroupGetEnabledMap(llmReq.Model, ctx)
+	group, err := groupForAPIKeyRequest(llmReq.Model, c.GetString("supported_channels"), ctx)
 	if err != nil {
 		resp.Error(c, http.StatusNotFound, "model not found")
 		return
 	}
-	group = restrictGroupChannels(group, c.GetString("supported_channels"))
 	apiKeyID := c.GetInt("api_key_id")
 	// responses 续传粘性：previous_response_id 命中时优先路由回上次成功的渠道/key。
 	var preferredSticky *balancer.SessionEntry

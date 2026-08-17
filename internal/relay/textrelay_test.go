@@ -819,3 +819,44 @@ func TestTextHandlerRespectsSupportedChannels(t *testing.T) {
 		t.Fatalf("blocked channel received %d request(s), want 0", got)
 	}
 }
+
+func TestTextHandlerRoutesChannelModelWithoutGroupForRestrictedKey(t *testing.T) {
+	if dbpkg.GetDB() != nil {
+		_ = dbpkg.Close()
+	}
+	dbPath := filepath.Join(t.TempDir(), "textrelay-channel-model-without-group.db")
+	if err := dbpkg.InitDB("sqlite", dbPath, false); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbpkg.Close() })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-direct","object":"chat.completion","model":"direct-model","choices":[{"index":0,"message":{"role":"assistant","content":"direct channel ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}`))
+	}))
+	defer upstream.Close()
+
+	ctx := context.Background()
+	channel := &model.Channel{
+		Name:     "textrelay-direct-channel",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: upstream.URL}},
+		Model:    "direct-model",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "direct-key"}},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+
+	// 不创建任何分组：限渠道的 API Key 应能直接通过渠道模型配置路由。
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"direct-model","messages":[{"role":"user","content":"hi"}]}`)
+	c.Set("supported_channels", fmt.Sprintf("%d", channel.ID))
+
+	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+}

@@ -326,11 +326,10 @@ func bestEffortWarmupUpstreamWS(
 		}
 	}
 
-	group, err := op.GroupGetEnabledMap(requestModel, ctx)
+	group, err := groupForAPIKeyRequest(requestModel, supportedChannels, ctx)
 	if err != nil {
 		return fmt.Errorf("model not found")
 	}
-	group = restrictGroupChannels(group, supportedChannels)
 
 	iter := balancer.NewIterator(group, apiKeyID, requestModel)
 	if iter.Len() == 0 {
@@ -423,11 +422,10 @@ func newWSRelayRequest(
 	rawBody []byte,
 	supportedChannels string,
 ) (*relayRequest, *dbmodel.Group, error) {
-	group, err := op.GroupGetEnabledMap(requestModel, ctx)
+	group, err := groupForAPIKeyRequest(requestModel, supportedChannels, ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("model not found")
 	}
-	group = restrictGroupChannels(group, supportedChannels)
 
 	iter := balancer.NewIteratorWithPreference(group, apiKeyID, requestModel, preferredSticky)
 	if iter.Len() == 0 {
