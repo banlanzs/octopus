@@ -71,6 +71,20 @@ func TestProtocolCandidatesAutoResponsesFamily(t *testing.T) {
 	}
 }
 
+func TestProtocolCandidatesDiscardsStaleLearnedForClientProtocol(t *testing.T) {
+	clearProtocolCapabilityCache(t)
+	rememberProtocolCapability(30, "http://x", clientProtocolOpenAIResponse, outbound.OutboundTypeOpenAIChat)
+
+	got := protocolCandidates(outbound.OutboundTypeAuto, clientProtocolOpenAIResponse, 30, "http://x")
+	want := []outbound.OutboundType{outbound.OutboundTypeOpenAIResponse}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("responses candidates = %v, want %v", got, want)
+	}
+	if learned, unsupported, hit := lookupProtocolCapability(30, "http://x", clientProtocolOpenAIResponse); hit && !unsupported && learned == outbound.OutboundTypeOpenAIChat {
+		t.Fatal("stale learned capability should have been removed from cache")
+	}
+}
+
 func TestProtocolCandidatesAutoEmbeddingFamily(t *testing.T) {
 	clearProtocolCapabilityCache(t)
 	got := protocolCandidates(outbound.OutboundTypeAuto, clientProtocolOpenAIEmbedding, 4, "http://x")

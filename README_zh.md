@@ -369,6 +369,7 @@ model_provider = "octopus"
 [model_providers.octopus]
 name = "octopus"
 base_url = "http://127.0.0.1:8080/v1"
+wire_api = "responses"
 ```
 编辑 `~/.codex/auth.json`
 

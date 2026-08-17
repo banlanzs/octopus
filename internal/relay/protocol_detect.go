@@ -110,6 +110,24 @@ func chatFamilyFallbackChain(clientType outbound.OutboundType) []outbound.Outbou
 	return chain
 }
 
+// protocolCandidatesForClient 返回无缓存时该客户端协议应尝试的上游协议列表。
+func protocolCandidatesForClient(clientProtocol string) []outbound.OutboundType {
+	clientType, ok := clientTypeOf(clientProtocol)
+	if !ok {
+		return nil
+	}
+	switch clientProtocol {
+	case clientProtocolAnthropic, clientProtocolOpenAIChat:
+		return chatFamilyFallbackChain(clientType)
+	case clientProtocolOpenAIResponse:
+		return []outbound.OutboundType{outbound.OutboundTypeOpenAIResponse}
+	case clientProtocolOpenAIEmbedding:
+		return []outbound.OutboundType{outbound.OutboundTypeOpenAIEmbedding}
+	default:
+		return nil
+	}
+}
+
 // protocolCandidates 返回该渠道本次请求「要按顺序尝试的上游协议列表」：
 //   - 非 auto 渠道：只有声明的协议本身（权威配置，不探测）；
 //   - auto 渠道 + 缓存命中 learned：只有已学到的协议（跳过客户端协议首探，
@@ -126,23 +144,18 @@ func protocolCandidates(channelType outbound.OutboundType, clientProtocol string
 		if unsupported {
 			return nil
 		}
-		return []outbound.OutboundType{learned}
+		// 防御脏缓存：learned 必须属于当前客户端协议的合法候选链。
+		// 否则（例如历史错误导致 responses 客户端缓存了 chat 协议）
+		// 丢弃缓存并重新按「客户端协议优先」生成候选。
+		for _, candidate := range protocolCandidatesForClient(clientProtocol) {
+			if candidate == learned {
+				return []outbound.OutboundType{learned}
+			}
+		}
+		protocolCapabilityCache.Delete(protocolCapKey(channelID, baseURL, clientProtocol))
 	}
 
-	clientType, ok := clientTypeOf(clientProtocol)
-	if !ok {
-		return nil
-	}
-	switch clientProtocol {
-	case clientProtocolAnthropic, clientProtocolOpenAIChat:
-		return chatFamilyFallbackChain(clientType)
-	case clientProtocolOpenAIResponse:
-		return []outbound.OutboundType{outbound.OutboundTypeOpenAIResponse}
-	case clientProtocolOpenAIEmbedding:
-		return []outbound.OutboundType{outbound.OutboundTypeOpenAIEmbedding}
-	default:
-		return nil
-	}
+	return protocolCandidatesForClient(clientProtocol)
 }
 
 // ============================================================================
