@@ -17,6 +17,7 @@ export interface APIKey {
     max_cost?: number; // 不传表示无限制
     max_rpm?: number; // 不传表示无限制
     supported_models?: string; // 不传表示支持所有模型
+    supported_channels?: string; // 逗号分隔的渠道 ID，不传表示支持所有渠道
 }
 
 /**

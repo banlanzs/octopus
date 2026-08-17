@@ -24,6 +24,7 @@ import {
     type APIKey,
 } from '@/api/endpoints/apikey';
 import { useGroupList } from '@/api/endpoints/group';
+import { useChannelList } from '@/api/endpoints/channel';
 import { useStatsAPIKey } from '@/api/endpoints/stats';
 import { useSettingValue, SettingKey } from '@/api/endpoints/setting';
 import { APIKeyExportOverlay } from './APIKeyExport';
@@ -74,6 +75,19 @@ function hasModel(supported: string | undefined, model: string): boolean {
     return supported ? supported.split(',').includes(model) : false;
 }
 
+function toggleChannel(current: string | undefined, channelID: number): string | undefined {
+    const value = String(channelID);
+    const channels = current ? current.split(',').filter(Boolean) : [];
+    const next = channels.includes(value)
+        ? channels.filter((id) => id !== value)
+        : [...channels, value];
+    return next.length ? next.join(',') : undefined;
+}
+
+function hasChannel(supported: string | undefined, channelID: number): boolean {
+    return supported ? supported.split(',').includes(String(channelID)) : false;
+}
+
 interface APIKeyFormProps {
     apiKey?: APIKey;
     isPending: boolean;
@@ -85,6 +99,7 @@ interface APIKeyFormProps {
 function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKeyFormProps) {
     const t = useTranslations('setting');
     const { data: groups = [] } = useGroupList();
+    const { data: channels = [] } = useChannelList();
 
     const [form, setForm] = useState<Omit<APIKey, 'id' | 'api_key'>>(() => ({
         name: apiKey?.name ?? '',
@@ -93,6 +108,7 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
         max_cost: apiKey?.max_cost,
         max_rpm: apiKey?.max_rpm,
         supported_models: apiKey?.supported_models,
+        supported_channels: apiKey?.supported_channels,
     }));
     const [maxCostInput, setMaxCostInput] = useState(() =>
         apiKey?.max_cost != null ? String(apiKey.max_cost) : ''
@@ -115,6 +131,13 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
         const names = groups.map((g) => g.name).filter(Boolean);
         return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
     }, [groups]);
+
+    const availableChannels = useMemo(() => {
+        return channels
+            .map((c) => c.raw)
+            .filter((c) => c.name)
+            .sort((a, b) => a.id - b.id);
+    }, [channels]);
 
     const expireDate = parseExpireDate(form.expire_at);
     const neverExpire = !form.expire_at;
@@ -365,6 +388,44 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
                     )}
                 </div>
                 <div className="text-[11px] text-muted-foreground/80">{t('apiKey.form.modelsHint')}</div>
+            </div>
+
+            <div className="grid gap-1">
+                <div className="text-xs text-muted-foreground">{t('apiKey.form.supportedChannels')}</div>
+                <div className="max-h-40 overflow-auto rounded-xl p-2">
+                    {availableChannels.length === 0 ? (
+                        <div className="text-xs text-muted-foreground py-2 text-center">
+                            {t('apiKey.form.noChannels')}
+                        </div>
+                    ) : (
+                        <div className="flex flex-wrap gap-2">
+                            {availableChannels.map((channel) => {
+                                const checked = hasChannel(form.supported_channels, channel.id);
+                                return (
+                                    <button
+                                        key={channel.id}
+                                        type="button"
+                                        disabled={isPending}
+                                        onClick={() => updateForm({ supported_channels: toggleChannel(form.supported_channels, channel.id) })}
+                                        className="text-left disabled:opacity-50"
+                                    >
+                                        <Badge
+                                            variant={checked ? 'default' : 'outline'}
+                                            className={cn(
+                                                'cursor-pointer select-none',
+                                                !checked && 'bg-background/40 hover:bg-background/70',
+                                                !channel.enabled && 'opacity-60'
+                                            )}
+                                        >
+                                            {channel.name}
+                                        </Badge>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+                <div className="text-[11px] text-muted-foreground/80">{t('apiKey.form.channelsHint')}</div>
             </div>
 
             <div className="flex items-center justify-between pt-1">

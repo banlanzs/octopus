@@ -79,6 +79,7 @@ func HandleResponsesCompact(c *gin.Context) {
 		resp.ErrorWithCode(c, http.StatusNotFound, CodeRelayModelNotFound, "model not found")
 		return
 	}
+	group = restrictGroupChannels(group, c.GetString("supported_channels"))
 
 	iter := balancer.NewIterator(group, apiKeyID, requestModel)
 	if iter.Len() == 0 {

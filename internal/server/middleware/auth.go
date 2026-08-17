@@ -88,6 +88,7 @@ func APIKeyAuth() gin.HandlerFunc {
 		}
 		c.Set("request_type", requestType)
 		c.Set("supported_models", apiKeyObj.SupportedModels)
+		c.Set("supported_channels", apiKeyObj.SupportedChannels)
 		c.Set("api_key_id", apiKeyObj.ID)
 		c.Next()
 	}

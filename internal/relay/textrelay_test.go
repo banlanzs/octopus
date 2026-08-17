@@ -745,3 +745,77 @@ func TestTextHandlerAnthropicMessagesStream(t *testing.T) {
 		t.Fatalf("stream body missing content: %q", body)
 	}
 }
+
+func TestTextHandlerRespectsSupportedChannels(t *testing.T) {
+	if dbpkg.GetDB() != nil {
+		_ = dbpkg.Close()
+	}
+	dbPath := filepath.Join(t.TempDir(), "textrelay-supported-channels.db")
+	if err := dbpkg.InitDB("sqlite", dbPath, false); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbpkg.Close() })
+
+	var blockedHits atomic.Int32
+	blockedUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		blockedHits.Add(1)
+		http.Error(w, "blocked channel must not be used", http.StatusInternalServerError)
+	}))
+	defer blockedUpstream.Close()
+
+	allowedUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hello from allowed channel"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}`))
+	}))
+	defer allowedUpstream.Close()
+
+	ctx := context.Background()
+	blocked := &model.Channel{
+		Name:     "textrelay-blocked-channel",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: blockedUpstream.URL}},
+		Model:    "gpt-4o",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "blocked-key"}},
+	}
+	if err := op.ChannelCreate(blocked, ctx); err != nil {
+		t.Fatalf("ChannelCreate(blocked) failed: %v", err)
+	}
+	allowed := &model.Channel{
+		Name:     "textrelay-allowed-channel",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: allowedUpstream.URL}},
+		Model:    "gpt-4o",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "allowed-key"}},
+	}
+	if err := op.ChannelCreate(allowed, ctx); err != nil {
+		t.Fatalf("ChannelCreate(allowed) failed: %v", err)
+	}
+
+	// failover 模式下 blocked 优先级更高，若白名单未生效请求会先打到 blocked。
+	group := &model.Group{
+		Name: "gpt-4o",
+		Mode: model.GroupModeFailover,
+		Items: []model.GroupItem{
+			{ChannelID: blocked.ID, ModelName: "gpt-4o", Priority: 1, Weight: 1},
+			{ChannelID: allowed.ID, ModelName: "gpt-4o", Priority: 2, Weight: 1},
+		},
+	}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
+	c.Set("supported_channels", fmt.Sprintf("%d", allowed.ID))
+
+	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	if got := blockedHits.Load(); got != 0 {
+		t.Fatalf("blocked channel received %d request(s), want 0", got)
+	}
+}

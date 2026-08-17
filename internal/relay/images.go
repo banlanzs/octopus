@@ -111,6 +111,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 		resp.ErrorWithCode(c, http.StatusNotFound, CodeRelayModelNotFound, "model not found")
 		return
 	}
+	group = restrictGroupChannels(group, c.GetString("supported_channels"))
 
 	// 创建迭代器（策略排序 + 粘性优先）
 	iter := balancer.NewIterator(group, apiKeyID, requestModel)

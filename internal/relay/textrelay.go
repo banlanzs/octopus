@@ -79,6 +79,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 		resp.Error(c, http.StatusNotFound, "model not found")
 		return
 	}
+	group = restrictGroupChannels(group, c.GetString("supported_channels"))
 	apiKeyID := c.GetInt("api_key_id")
 	// responses 续传粘性：previous_response_id 命中时优先路由回上次成功的渠道/key。
 	var preferredSticky *balancer.SessionEntry
