@@ -9,6 +9,7 @@ import (
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/utils/cache"
+	"github.com/bestruirui/octopus/internal/utils/xstrings"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -32,10 +33,14 @@ func GroupListModel(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-// GroupListModelByChannelIDs 返回至少存在一条启用分组路由、且目标渠道
-// 在 channelIDs 白名单内的模型名（模型名即分组名）。
+// GroupListModelByChannelIDs 返回渠道白名单内可用的模型名。
+// 同时覆盖两种来源：
+//  1. 分组条目：分组通过 GroupItem 路由到白名单渠道（支持别名分组）；
+//  2. 渠道模型配置：渠道 Model/CustomModel 中配置的模型。
 func GroupListModelByChannelIDs(channelIDs map[int]struct{}, ctx context.Context) ([]string, error) {
 	modelSet := make(map[string]struct{})
+
+	// 来源 1：已有分组路由条目
 	for _, group := range groupCache.GetAll() {
 		name := strings.TrimSpace(group.Name)
 		if name == "" {
@@ -51,6 +56,18 @@ func GroupListModelByChannelIDs(channelIDs map[int]struct{}, ctx context.Context
 			}
 		}
 	}
+
+	// 来源 2：渠道直接配置的模型
+	for channelID := range channelIDs {
+		channel, ok := channelCache.Get(channelID)
+		if !ok || !channel.Enabled {
+			continue
+		}
+		for _, name := range xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel) {
+			modelSet[name] = struct{}{}
+		}
+	}
+
 	models := make([]string, 0, len(modelSet))
 	for name := range modelSet {
 		models = append(models, name)

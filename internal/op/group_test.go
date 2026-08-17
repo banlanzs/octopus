@@ -95,6 +95,26 @@ func TestGroupListModelForAPIKeyFiltersByChannelsAndModels(t *testing.T) {
 		}
 	})
 
+	t.Run("channel model config is used without group items", func(t *testing.T) {
+		configOnly := &model.Channel{
+			Name:    "config-only-channel",
+			Type:    outbound.OutboundTypeOpenAIChat,
+			Enabled: true,
+			Model:   "config-only-a,config-only-b",
+		}
+		if err := ChannelCreate(configOnly, ctx); err != nil {
+			t.Fatalf("ChannelCreate(config-only) failed: %v", err)
+		}
+		got, err := GroupListModelForAPIKey(model.APIKey{SupportedChannels: fmt.Sprintf("%d", configOnly.ID)}, ctx)
+		if err != nil {
+			t.Fatalf("GroupListModelForAPIKey failed: %v", err)
+		}
+		want := []string{"config-only-a", "config-only-b"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("models = %v, want %v", got, want)
+		}
+	})
+
 	t.Run("unknown channel whitelist yields empty model list", func(t *testing.T) {
 		got, err := GroupListModelForAPIKey(model.APIKey{SupportedChannels: "99999"}, ctx)
 		if err != nil {
