@@ -74,7 +74,7 @@ func HandleResponsesCompact(c *gin.Context) {
 	requestModel := compactReq.Model
 	apiKeyID := c.GetInt("api_key_id")
 
-	group, _, err := groupForAPIKeyRequest(requestModel, c.GetString("supported_channels"), c.Request.Context())
+	group, _, err := groupForAPIKeyRequestWithRestrictions(requestModel, c.GetString("supported_channels"), supportedTagsFromContext(c), c.Request.Context())
 	if err != nil {
 		resp.ErrorWithCode(c, http.StatusNotFound, CodeRelayModelNotFound, "model not found")
 		return
@@ -124,11 +124,12 @@ func HandleResponsesCompact(c *gin.Context) {
 			continue
 		}
 		schedulingExempt := channel.SchedulingExempt
+		actualModel := channel.ResolveModelRedirect(item.ModelName)
 		if !supportsResponsesCompact(channel.Type) {
 			iter.Skip(channel.ID, 0, channel.Name, "channel type not compatible with responses compact")
 			continue
 		}
-		candidateBody, err := responsesCompactBodyForModel(body, item.ModelName)
+		candidateBody, err := responsesCompactBodyForModel(body, actualModel)
 		if err != nil {
 			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("failed to rewrite compact model: %v", err))
 			lastErr = err
@@ -175,7 +176,7 @@ func HandleResponsesCompact(c *gin.Context) {
 				}
 			}
 
-			statusCode, retryAfter, attemptErr = forwardResponsesCompact(c, metrics, iter, channel, usedKey, item.ModelName, candidateBody)
+			statusCode, retryAfter, attemptErr = forwardResponsesCompact(c, metrics, iter, channel, usedKey, actualModel, candidateBody)
 			if attemptErr == nil {
 				success = true
 				break

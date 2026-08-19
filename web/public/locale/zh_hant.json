@@ -458,7 +458,10 @@
                 "cancel": "取消",
                 "create": "建立",
                 "save": "儲存",
-                "confirm": "確認"
+                "confirm": "確認",
+                "supportedTags": "支援標籤",
+                "noTags": "暫無可用標籤",
+                "tagsHint": "選擇標籤後，金鑰只能呼叫帶有任一指定標籤的渠道所暴露的模型；不包含群組同名模型。"
             },
             "stats": {
                 "noData": "暫無統計數據",
@@ -1027,7 +1030,17 @@
             "batchImportSuccess": "已匯入 {count} 個 API Key",
             "batchImportDuplicates": "已略過 {count} 個重複 API Key",
             "batchImportFailed": "匯入失敗：{message}",
-            "remark": "備註"
+            "remark": "備註",
+            "modelRedirect": "模型重定向",
+            "modelRedirectAdd": "新增重定向",
+            "modelRedirectHint": "別名模型 → 上游實際模型：請求別名時，實際轉發到目標模型。",
+            "modelRedirectAlias": "別名模型（對外暴露）",
+            "modelRedirectTarget": "上游實際模型",
+            "modelRedirectRemove": "移除重定向",
+            "modelRedirectOnly": "僅暴露別名模型",
+            "modelRedirectOnlyHint": "開啟後，渠道設定的原始模型不會出現在 /v1/models 與渠道模型列表中。",
+            "tags": "標籤",
+            "tagsPlaceholder": "輸入標籤後按 Enter"
         }
     },
     "siteChannel": {

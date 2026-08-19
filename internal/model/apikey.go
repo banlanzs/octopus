@@ -6,15 +6,40 @@ import (
 )
 
 type APIKey struct {
-	ID                int     `json:"id" gorm:"primaryKey"`
-	Name              string  `json:"name" gorm:"not null"`
-	APIKey            string  `json:"api_key" gorm:"not null"`
-	Enabled           bool    `json:"enabled" gorm:"default:true"`
-	ExpireAt          int64   `json:"expire_at,omitempty"`
-	MaxCost           float64 `json:"max_cost,omitempty"`
-	MaxRPM            int     `json:"max_rpm,omitempty"`
-	SupportedModels   string  `json:"supported_models,omitempty"`
-	SupportedChannels string  `json:"supported_channels,omitempty"` // 逗号分隔的渠道 ID 白名单，空表示不限渠道
+	ID                int      `json:"id" gorm:"primaryKey"`
+	Name              string   `json:"name" gorm:"not null"`
+	APIKey            string   `json:"api_key" gorm:"not null"`
+	Enabled           bool     `json:"enabled" gorm:"default:true"`
+	ExpireAt          int64    `json:"expire_at,omitempty"`
+	MaxCost           float64  `json:"max_cost,omitempty"`
+	MaxRPM            int      `json:"max_rpm,omitempty"`
+	SupportedModels   string   `json:"supported_models,omitempty"`
+	SupportedChannels string   `json:"supported_channels,omitempty"`                    // 逗号分隔的渠道 ID 白名单，空表示不限渠道
+	SupportedTags     []string `json:"supported_tags,omitempty" gorm:"serializer:json"` // 渠道标签白名单，空表示不限标签
+}
+
+// NormalizeAPIKeyTags 标准化 API Key 标签白名单：trim、去空、去重。
+func NormalizeAPIKeyTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(tags))
+	normalized := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		normalized = append(normalized, tag)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 // SupportedChannelIDSet 解析 supported_channels 字段。

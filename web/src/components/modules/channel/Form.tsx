@@ -1,5 +1,6 @@
-import { ChannelType, type AutoGroupType, type Channel, type ChannelTestResult, type ChannelWSMode, useFetchModel, useTestChannel } from '@/api/endpoints/channel';
+import { ChannelType, type AutoGroupType, type Channel, type ChannelTestResult, type ChannelWSMode, type ModelRedirect, useFetchModel, useTestChannel } from '@/api/endpoints/channel';
 import { ProxySelector } from '@/components/modules/proxy-pool/ProxySelector';
+import { TagInput } from '@/components/modules/site/TagInput';
 import {
     Select,
     SelectContent,
@@ -39,6 +40,9 @@ export interface ChannelFormData {
     keys: ChannelKeyFormItem[];
     model: string;
     custom_model: string;
+    tags: string[];
+    model_redirects: ModelRedirect[];
+    model_redirect_only: boolean;
     enabled: boolean;
     auto_sync: boolean;
     force_deep_seek_thinking: boolean;
@@ -225,6 +229,23 @@ export function ChannelForm({
 
     const handleRemoveCustomModel = (model: string) => {
         updateModels(autoModels, customModels.filter(m => m !== model));
+    };
+
+    const handleAddRedirect = () => {
+        onFormDataChange({
+            ...formData,
+            model_redirects: [...(formData.model_redirects ?? []), { model: '', target_model: '' }],
+        });
+    };
+
+    const handleUpdateRedirect = (idx: number, patch: Partial<ModelRedirect>) => {
+        const next = (formData.model_redirects ?? []).map((r, i) => (i === idx ? { ...r, ...patch } : r));
+        onFormDataChange({ ...formData, model_redirects: next });
+    };
+
+    const handleRemoveRedirect = (idx: number) => {
+        const next = (formData.model_redirects ?? []).filter((_, i) => i !== idx);
+        onFormDataChange({ ...formData, model_redirects: next });
     };
 
     const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -643,6 +664,75 @@ export function ChannelForm({
                         )}
                     </div>
                 </div>
+            </div>
+
+            <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                    <label className="text-sm font-medium text-card-foreground">{t('modelRedirect')}</label>
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleAddRedirect}
+                        className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
+                    >
+                        <Plus className="h-3 w-3 mr-1" />
+                        {t('modelRedirectAdd')}
+                    </Button>
+                </div>
+                <p className="text-xs text-muted-foreground/80 leading-relaxed">{t('modelRedirectHint')}</p>
+                {(formData.model_redirects ?? []).length > 0 ? (
+                    <div className="space-y-2">
+                        {(formData.model_redirects ?? []).map((redirect, idx) => (
+                            <div key={`redirect-${idx}`} className="flex items-center gap-2">
+                                <Input
+                                    type="text"
+                                    value={redirect.model}
+                                    onChange={(e) => handleUpdateRedirect(idx, { model: e.target.value })}
+                                    placeholder={t('modelRedirectAlias')}
+                                    className="rounded-xl flex-1"
+                                />
+                                <span className="text-xs text-muted-foreground shrink-0">→</span>
+                                <Input
+                                    type="text"
+                                    value={redirect.target_model}
+                                    onChange={(e) => handleUpdateRedirect(idx, { target_model: e.target.value })}
+                                    placeholder={t('modelRedirectTarget')}
+                                    className="rounded-xl flex-1"
+                                />
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleRemoveRedirect(idx)}
+                                    className="h-8 w-8 p-0 rounded-xl text-muted-foreground hover:text-destructive hover:bg-transparent"
+                                    title={t('modelRedirectRemove')}
+                                >
+                                    <X className="h-4 w-4" />
+                                </Button>
+                            </div>
+                        ))}
+                    </div>
+                ) : null}
+                <label className="flex items-center gap-2 cursor-pointer">
+                    <Switch
+                        checked={formData.model_redirect_only ?? false}
+                        onCheckedChange={(checked) => onFormDataChange({ ...formData, model_redirect_only: checked })}
+                    />
+                    <span className="text-sm text-card-foreground">{t('modelRedirectOnly')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground/80 leading-relaxed">{t('modelRedirectOnlyHint')}</p>
+            </div>
+
+            <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                    <label className="text-sm font-medium text-card-foreground">{t('tags')}</label>
+                </div>
+                <TagInput
+                    value={formData.tags ?? []}
+                    onChange={(tags) => onFormDataChange({ ...formData, tags })}
+                    placeholder={t('tagsPlaceholder')}
+                />
             </div>
 
             <div className="rounded-xl border bg-card p-4">

@@ -70,7 +70,7 @@ export function Channel() {
                 return true;
             }
 
-            if (term && !channel.raw.name.toLowerCase().includes(term)) {
+            if (term && !`${channel.raw.name} ${(channel.raw.tags ?? []).join(' ')}`.toLowerCase().includes(term)) {
                 return false;
             }
 

@@ -39,6 +39,11 @@ export type CustomHeader = {
     header_value: string;
 };
 
+export type ModelRedirect = {
+    model: string;
+    target_model: string;
+};
+
 export type ChannelKey = {
     id: number;
     channel_id: number;
@@ -69,6 +74,9 @@ export type Channel = {
     keys: ChannelKey[];
     model: string;
     custom_model: string;
+    tags: string[];
+    model_redirects: ModelRedirect[];
+    model_redirect_only: boolean;
     proxy_mode: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync: boolean;
@@ -87,10 +95,12 @@ export type Channel = {
 };
 
 // Internal type: backend may return null for slice fields; normalize to [] in select()
-type ChannelServer = Omit<Channel, 'base_urls' | 'custom_header' | 'keys'> & {
+type ChannelServer = Omit<Channel, 'base_urls' | 'custom_header' | 'keys' | 'tags' | 'model_redirects'> & {
     base_urls: BaseUrl[] | null;
     custom_header: CustomHeader[] | null;
     keys: ChannelKey[] | null;
+    tags: string[] | null;
+    model_redirects: ModelRedirect[] | null;
 };
 
 /**
@@ -104,6 +114,9 @@ export type CreateChannelRequest = {
     keys: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
     model: string;
     custom_model?: string;
+    tags?: string[];
+    model_redirects?: ModelRedirect[];
+    model_redirect_only?: boolean;
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync?: boolean;
@@ -129,6 +142,9 @@ export type UpdateChannelRequest = {
     base_urls?: BaseUrl[];
     model?: string;
     custom_model?: string;
+    tags?: string[];
+    model_redirects?: ModelRedirect[];
+    model_redirect_only?: boolean;
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync?: boolean;
@@ -228,6 +244,9 @@ export function useChannelList() {
                 custom_header: item.custom_header ?? [],
                 ws_mode: item.ws_mode ?? 'inherit',
                 keys: item.keys ?? [],
+                tags: item.tags ?? [],
+                model_redirects: item.model_redirects ?? [],
+                model_redirect_only: item.model_redirect_only ?? false,
                 proxy_mode: item.proxy_mode ?? 'direct',
                 proxy_config_id: item.proxy_config_id ?? null,
                 scheduling_exempt: item.scheduling_exempt ?? false,

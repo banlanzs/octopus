@@ -458,7 +458,10 @@
                 "cancel": "Cancel",
                 "create": "Create",
                 "save": "Save",
-                "confirm": "Confirm"
+                "confirm": "Confirm",
+                "supportedTags": "Supported Tags",
+                "noTags": "No tags available",
+                "tagsHint": "Select tags. The key can only call models exposed by channels carrying at least one selected tag; group routes are not included."
             },
             "stats": {
                 "noData": "No statistics available",
@@ -1027,7 +1030,17 @@
             "batchImportSuccess": "Imported {count} API key(s)",
             "batchImportDuplicates": "Skipped {count} duplicate API key(s)",
             "batchImportFailed": "Import failed: {message}",
-            "remark": "Remark"
+            "remark": "Remark",
+            "modelRedirect": "Model Redirects",
+            "modelRedirectAdd": "Add Redirect",
+            "modelRedirectHint": "Alias model → upstream model. Requests to the alias are forwarded to the target model.",
+            "modelRedirectAlias": "Alias model (exposed)",
+            "modelRedirectTarget": "Upstream model",
+            "modelRedirectRemove": "Remove redirect",
+            "modelRedirectOnly": "Only expose alias models",
+            "modelRedirectOnlyHint": "When enabled, the original models configured on the channel are hidden from /v1/models and channel model lists.",
+            "tags": "Tags",
+            "tagsPlaceholder": "Type a tag and press Enter"
         }
     },
     "siteChannel": {

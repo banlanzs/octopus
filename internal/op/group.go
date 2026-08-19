@@ -9,7 +9,6 @@ import (
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/utils/cache"
-	"github.com/bestruirui/octopus/internal/utils/xstrings"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -28,7 +27,34 @@ func GroupList(ctx context.Context) ([]model.Group, error) {
 func GroupListModel(ctx context.Context) ([]string, error) {
 	models := []string{}
 	for _, group := range groupCache.GetAll() {
-		models = append(models, group.Name)
+		name := strings.TrimSpace(group.Name)
+		if name == "" {
+			continue
+		}
+		// 空分组保持原有语义（仍暴露分组名）。
+		if len(group.Items) == 0 {
+			models = append(models, name)
+			continue
+		}
+		// 分组内所有条目都被渠道"仅暴露别名"隐藏时，不再暴露该分组名，
+		// 与请求路由的过滤口径保持一致。
+		visible := false
+		for _, item := range group.Items {
+			channel, ok := channelCache.Get(item.ChannelID)
+			// 渠道缺失/禁用时保持旧语义：分组名仍照常暴露。
+			if !ok || !channel.Enabled {
+				visible = true
+				break
+			}
+			if channel.ModelRedirectOnly && !channel.IsModelExposed(item.ModelName) {
+				continue
+			}
+			visible = true
+			break
+		}
+		if visible {
+			models = append(models, name)
+		}
 	}
 	return models, nil
 }
@@ -36,7 +62,7 @@ func GroupListModel(ctx context.Context) ([]string, error) {
 // GroupListModelByChannelIDs 返回渠道白名单内可用的模型名。
 // 同时覆盖两种来源：
 //  1. 分组条目：分组通过 GroupItem 路由到白名单渠道（支持别名分组）；
-//  2. 渠道模型配置：渠道 Model/CustomModel 中配置的模型。
+//  2. 渠道模型配置：渠道直接暴露的模型（含模型重定向别名）。
 func GroupListModelByChannelIDs(channelIDs map[int]struct{}, ctx context.Context) ([]string, error) {
 	modelSet := make(map[string]struct{})
 
@@ -50,22 +76,27 @@ func GroupListModelByChannelIDs(channelIDs map[int]struct{}, ctx context.Context
 			if _, ok := channelIDs[item.ChannelID]; !ok {
 				continue
 			}
-			if channel, ok := channelCache.Get(item.ChannelID); ok && channel.Enabled {
-				modelSet[name] = struct{}{}
-				break
+			channel, ok := channelCache.Get(item.ChannelID)
+			if !ok || !channel.Enabled {
+				continue
 			}
+			// 渠道开启"仅暴露别名"后，原始模型对应的分组条目不再把
+			// 该分组名暴露给客户端；仍允许别名条目对应的分组。
+			if channel.ModelRedirectOnly && !channel.IsModelExposed(item.ModelName) {
+				continue
+			}
+			modelSet[name] = struct{}{}
+			break
 		}
 	}
 
-	// 来源 2：渠道直接配置的模型
-	for channelID := range channelIDs {
-		channel, ok := channelCache.Get(channelID)
-		if !ok || !channel.Enabled {
-			continue
-		}
-		for _, name := range xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel) {
-			modelSet[name] = struct{}{}
-		}
+	// 来源 2：渠道直接暴露的模型（含重定向别名，遵守仅别名开关）
+	channelModels, err := ChannelListModelByChannelIDs(channelIDs, ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range channelModels {
+		modelSet[name] = struct{}{}
 	}
 
 	models := make([]string, 0, len(modelSet))
@@ -76,12 +107,59 @@ func GroupListModelByChannelIDs(channelIDs map[int]struct{}, ctx context.Context
 	return models, nil
 }
 
+// ChannelListModelByChannelIDs 仅返回白名单内渠道自身暴露的模型
+// （Model/CustomModel + 重定向别名，遵守 ModelRedirectOnly），
+// 不包含分组名。标签受限的 API Key 使用此口径。
+func ChannelListModelByChannelIDs(channelIDs map[int]struct{}, ctx context.Context) ([]string, error) {
+	modelSet := make(map[string]struct{})
+	for channelID := range channelIDs {
+		channel, ok := channelCache.Get(channelID)
+		if !ok || !channel.Enabled {
+			continue
+		}
+		for _, name := range channel.ExposedModelNames() {
+			modelSet[name] = struct{}{}
+		}
+	}
+	models := make([]string, 0, len(modelSet))
+	for name := range modelSet {
+		models = append(models, name)
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
+// channelIDsForAPIKeyTags 将 API Key 的标签白名单解析为渠道 ID 集合。
+// restricted 为 false 表示未配置标签白名单；配置后即使没有渠道命中也保持
+// 白名单语义（与 supported_channels 一致，避免无效配置回退为不限渠道）。
+func channelIDsForAPIKeyTags(key model.APIKey) (allowed map[int]struct{}, restricted bool) {
+	tags := model.NormalizeAPIKeyTags(key.SupportedTags)
+	if len(tags) == 0 {
+		return nil, false
+	}
+	allowed = ChannelIDsForTags(tags)
+	if channelIDs, channelRestricted := key.SupportedChannelIDSet(); channelRestricted {
+		intersection := make(map[int]struct{}, len(allowed))
+		for id := range allowed {
+			if _, ok := channelIDs[id]; ok {
+				intersection[id] = struct{}{}
+			}
+		}
+		return intersection, true
+	}
+	return allowed, true
+}
+
 // GroupListModelForAPIKey 返回 API Key 实际可调用的模型列表：
-// 先按渠道白名单收窄，再按模型白名单过滤，两个限制取交集。
+// 标签白名单优先（只统计标签渠道自身暴露的模型，不纳入分组名），
+// 否则按渠道白名单收窄，再按模型白名单过滤，限制之间取交集。
 func GroupListModelForAPIKey(key model.APIKey, ctx context.Context) ([]string, error) {
 	var models []string
 	var err error
-	if channelIDs, restricted := key.SupportedChannelIDSet(); restricted {
+	if channelIDs, restricted := channelIDsForAPIKeyTags(key); restricted {
+		// 标签受限时只返回渠道自身暴露的模型，不包含"分组"的同名模型。
+		models, err = ChannelListModelByChannelIDs(channelIDs, ctx)
+	} else if channelIDs, restricted := key.SupportedChannelIDSet(); restricted {
 		models, err = GroupListModelByChannelIDs(channelIDs, ctx)
 	} else {
 		models, err = GroupListModel(ctx)

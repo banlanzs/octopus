@@ -148,3 +148,131 @@ func TestGroupListModelForAPIKeyFiltersByChannelsAndModels(t *testing.T) {
 		}
 	})
 }
+
+func TestGroupListModelForAPIKeyTagsUseChannelModelsOnly(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	channelCache.Clear()
+	groupCache.Clear()
+	groupMap.Clear()
+	t.Cleanup(func() {
+		channelCache.Clear()
+		groupCache.Clear()
+		groupMap.Clear()
+	})
+
+	tagged := &model.Channel{
+		Name:              "tagged-channel",
+		Type:              outbound.OutboundTypeOpenAIChat,
+		Enabled:           true,
+		Model:             "gpt-4o",
+		Tags:              []string{"prod", "cheap"},
+		ModelRedirects:    []model.ModelRedirect{{Model: "fast-gpt", TargetModel: "gpt-4o"}},
+		ModelRedirectOnly: true,
+	}
+	if err := ChannelCreate(tagged, ctx); err != nil {
+		t.Fatalf("ChannelCreate(tagged) failed: %v", err)
+	}
+	untagged := &model.Channel{
+		Name:    "untagged-channel",
+		Type:    outbound.OutboundTypeOpenAIChat,
+		Enabled: true,
+		Model:   "other-model",
+	}
+	if err := ChannelCreate(untagged, ctx); err != nil {
+		t.Fatalf("ChannelCreate(untagged) failed: %v", err)
+	}
+
+	// 分组里存在同名/别名模型：标签受限时不应纳入 /v1/models 或路由。
+	group := &model.Group{
+		Name: "group-alias",
+		Mode: model.GroupModeRoundRobin,
+		Items: []model.GroupItem{
+			{ChannelID: tagged.ID, ModelName: "gpt-4o", Weight: 1},
+		},
+	}
+	if err := GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+
+	got, err := GroupListModelForAPIKey(model.APIKey{SupportedTags: []string{"prod"}}, ctx)
+	if err != nil {
+		t.Fatalf("GroupListModelForAPIKey failed: %v", err)
+	}
+	want := []string{"fast-gpt"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("models = %v, want %v", got, want)
+	}
+
+	// 标签 + 模型白名单取交集。
+	got, err = GroupListModelForAPIKey(model.APIKey{SupportedTags: []string{"prod"}, SupportedModels: "gpt-4o"}, ctx)
+	if err != nil {
+		t.Fatalf("GroupListModelForAPIKey failed: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("models = %v, want empty", got)
+	}
+
+	// 标签与渠道 ID 白名单取交集：无交集时为空。
+	got, err = GroupListModelForAPIKey(model.APIKey{
+		SupportedTags:     []string{"prod"},
+		SupportedChannels: fmt.Sprintf("%d", untagged.ID),
+	}, ctx)
+	if err != nil {
+		t.Fatalf("GroupListModelForAPIKey failed: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("models = %v, want empty", got)
+	}
+}
+
+func TestGroupListModelHidesRedirectOnlyOriginalGroup(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	channelCache.Clear()
+	groupCache.Clear()
+	groupMap.Clear()
+	t.Cleanup(func() {
+		channelCache.Clear()
+		groupCache.Clear()
+		groupMap.Clear()
+	})
+
+	redirectOnly := &model.Channel{
+		Name:              "redirect-only-channel",
+		Type:              outbound.OutboundTypeOpenAIChat,
+		Enabled:           true,
+		Model:             "gpt-4o",
+		ModelRedirects:    []model.ModelRedirect{{Model: "fast-gpt", TargetModel: "gpt-4o"}},
+		ModelRedirectOnly: true,
+	}
+	if err := ChannelCreate(redirectOnly, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+
+	if err := GroupCreate(&model.Group{
+		Name: "gpt-4o",
+		Mode: model.GroupModeRoundRobin,
+		Items: []model.GroupItem{
+			{ChannelID: redirectOnly.ID, ModelName: "gpt-4o", Weight: 1},
+		},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := GroupCreate(&model.Group{
+		Name: "fast-gpt",
+		Mode: model.GroupModeRoundRobin,
+		Items: []model.GroupItem{
+			{ChannelID: redirectOnly.ID, ModelName: "fast-gpt", Weight: 1},
+		},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate(alias) failed: %v", err)
+	}
+
+	got, err := GroupListModel(ctx)
+	if err != nil {
+		t.Fatalf("GroupListModel failed: %v", err)
+	}
+	want := []string{"fast-gpt"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("GroupListModel = %v, want %v", got, want)
+	}
+}

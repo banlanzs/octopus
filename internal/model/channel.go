@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
+	"github.com/bestruirui/octopus/internal/utils/xstrings"
 )
 
 type AutoGroupType int
@@ -41,6 +42,13 @@ func ParseAutoGroupSettingValue(value string) (AutoGroupType, bool) {
 	return mode, mode.Valid()
 }
 
+// ModelRedirect 渠道级模型重定向：客户端请求 Model 时，实际转发给上游的模型
+// 改写为 TargetModel。Model 是暴露给客户端的别名，TargetModel 是上游实际模型。
+type ModelRedirect struct {
+	Model       string `json:"model"`
+	TargetModel string `json:"target_model"`
+}
+
 type ChannelWSMode string
 
 const (
@@ -60,22 +68,29 @@ func (m ChannelWSMode) Normalize() ChannelWSMode {
 }
 
 type Channel struct {
-	ID            int                   `json:"id" gorm:"primaryKey"`
-	Name          string                `json:"name" gorm:"unique;not null"`
-	Type          outbound.OutboundType `json:"type"`
-	Enabled       bool                  `json:"enabled" gorm:"default:true"`
-	BaseUrls      []BaseUrl             `json:"base_urls" gorm:"serializer:json"`
-	Keys          []ChannelKey          `json:"keys" gorm:"foreignKey:ChannelID"`
-	Model         string                `json:"model"`
-	CustomModel   string                `json:"custom_model"`
-	ProxyMode     ProxyUsageMode        `json:"proxy_mode" gorm:"type:varchar(16);not null;default:'direct'"`
-	ProxyConfigID *int                  `json:"proxy_config_id"`
-	Proxy         bool                  `json:"-" gorm:"default:false"`
-	AutoSync      bool                  `json:"auto_sync" gorm:"default:false"`
-	AutoGroup     AutoGroupType         `json:"auto_group" gorm:"default:0"`
-	CustomHeader  []CustomHeader        `json:"custom_header" gorm:"serializer:json"`
-	WSMode        ChannelWSMode         `json:"ws_mode" gorm:"type:varchar(16);not null;default:'inherit'"`
-	ParamOverride *string               `json:"param_override"`
+	ID          int                   `json:"id" gorm:"primaryKey"`
+	Name        string                `json:"name" gorm:"unique;not null"`
+	Type        outbound.OutboundType `json:"type"`
+	Enabled     bool                  `json:"enabled" gorm:"default:true"`
+	BaseUrls    []BaseUrl             `json:"base_urls" gorm:"serializer:json"`
+	Keys        []ChannelKey          `json:"keys" gorm:"foreignKey:ChannelID"`
+	Model       string                `json:"model"`
+	CustomModel string                `json:"custom_model"`
+	Tags        []string              `json:"tags" gorm:"serializer:json"`
+	// ModelRedirects 渠道级模型重定向列表。Model 为暴露给客户端的别名，
+	// TargetModel 为实际发往上游的模型名。
+	ModelRedirects []ModelRedirect `json:"model_redirects" gorm:"serializer:json"`
+	// ModelRedirectOnly 仅暴露重定向别名模型：开启后渠道配置的原始
+	// Model/CustomModel 不再出现在 /v1/models 与渠道模型列表中。
+	ModelRedirectOnly bool           `json:"model_redirect_only" gorm:"default:false"`
+	ProxyMode         ProxyUsageMode `json:"proxy_mode" gorm:"type:varchar(16);not null;default:'direct'"`
+	ProxyConfigID     *int           `json:"proxy_config_id"`
+	Proxy             bool           `json:"-" gorm:"default:false"`
+	AutoSync          bool           `json:"auto_sync" gorm:"default:false"`
+	AutoGroup         AutoGroupType  `json:"auto_group" gorm:"default:0"`
+	CustomHeader      []CustomHeader `json:"custom_header" gorm:"serializer:json"`
+	WSMode            ChannelWSMode  `json:"ws_mode" gorm:"type:varchar(16);not null;default:'inherit'"`
+	ParamOverride     *string        `json:"param_override"`
 	// ForceDeepSeekThinking 强制把 Anthropic thinking 语义透传为 DeepSeek `thinking`
 	// 参数并重组 content[].thinking 块回传。用于中转站 DeepSeek 模型名不含
 	// "deepseek" 的渠道（否则会被当作普通 OpenAI 兼容模型剥离 thinking）。
@@ -154,23 +169,28 @@ type ChannelKeySelectOptions struct {
 
 // ChannelUpdateRequest 渠道更新请求 - 仅包含变更的数据
 type ChannelUpdateRequest struct {
-	ID            int                    `json:"id" binding:"required"`
-	Name          *string                `json:"name,omitempty"`
-	Type          *outbound.OutboundType `json:"type,omitempty"`
-	Enabled       *bool                  `json:"enabled,omitempty"`
-	BaseUrls      *[]BaseUrl             `json:"base_urls,omitempty"`
-	Model         *string                `json:"model,omitempty"`
-	CustomModel   *string                `json:"custom_model,omitempty"`
-	ProxyMode     *ProxyUsageMode        `json:"proxy_mode,omitempty"`
-	ProxyConfigID *int                   `json:"proxy_config_id,omitempty"`
-	Proxy         *bool                  `json:"-"`
-	AutoSync      *bool                  `json:"auto_sync,omitempty"`
-	AutoGroup     *AutoGroupType         `json:"auto_group,omitempty"`
-	CustomHeader  *[]CustomHeader        `json:"custom_header,omitempty"`
-	WSMode        *ChannelWSMode         `json:"ws_mode,omitempty"`
-	ChannelProxy  *string                `json:"-"`
-	ParamOverride *string                `json:"param_override,omitempty"`
-	MatchRegex    *string                `json:"match_regex,omitempty"`
+	ID          int                    `json:"id" binding:"required"`
+	Name        *string                `json:"name,omitempty"`
+	Type        *outbound.OutboundType `json:"type,omitempty"`
+	Enabled     *bool                  `json:"enabled,omitempty"`
+	BaseUrls    *[]BaseUrl             `json:"base_urls,omitempty"`
+	Model       *string                `json:"model,omitempty"`
+	CustomModel *string                `json:"custom_model,omitempty"`
+	Tags        *[]string              `json:"tags,omitempty"`
+	// ModelRedirects 为空数组表示清除重定向（nil 表示不修改）。
+	ModelRedirects *[]ModelRedirect `json:"model_redirects,omitempty"`
+	// ModelRedirectOnly 仅暴露重定向别名模型。
+	ModelRedirectOnly *bool           `json:"model_redirect_only,omitempty"`
+	ProxyMode         *ProxyUsageMode `json:"proxy_mode,omitempty"`
+	ProxyConfigID     *int            `json:"proxy_config_id,omitempty"`
+	Proxy             *bool           `json:"-"`
+	AutoSync          *bool           `json:"auto_sync,omitempty"`
+	AutoGroup         *AutoGroupType  `json:"auto_group,omitempty"`
+	CustomHeader      *[]CustomHeader `json:"custom_header,omitempty"`
+	WSMode            *ChannelWSMode  `json:"ws_mode,omitempty"`
+	ChannelProxy      *string         `json:"-"`
+	ParamOverride     *string         `json:"param_override,omitempty"`
+	MatchRegex        *string         `json:"match_regex,omitempty"`
 	// ForceDeepSeekThinking 强制启用 DeepSeek `thinking` 参数透传（中转站 DeepSeek 别名渠道）。
 	ForceDeepSeekThinking *bool `json:"force_deep_seek_thinking,omitempty"`
 	// ProbeEnabled 是否允许系统自动向该渠道发起探测请求（AutoRank 主动补样本）。
@@ -198,6 +218,132 @@ type ChannelKeyUpdateRequest struct {
 	Enabled    *bool   `json:"enabled,omitempty"`
 	ChannelKey *string `json:"channel_key,omitempty"`
 	Remark     *string `json:"remark,omitempty"`
+}
+
+// NormalizeChannelTags 标准化渠道标签：trim、去空、去重。空标签列表返回 nil。
+func NormalizeChannelTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(tags))
+	normalized := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		normalized = append(normalized, tag)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+// NormalizeModelRedirects 标准化模型重定向列表：trim、去空、按别名去重。
+// 同一别名只保留第一条有效配置。
+func NormalizeModelRedirects(redirects []ModelRedirect) []ModelRedirect {
+	if len(redirects) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(redirects))
+	normalized := make([]ModelRedirect, 0, len(redirects))
+	for _, redirect := range redirects {
+		alias := strings.TrimSpace(redirect.Model)
+		target := strings.TrimSpace(redirect.TargetModel)
+		if alias == "" || target == "" {
+			continue
+		}
+		if _, ok := seen[alias]; ok {
+			continue
+		}
+		seen[alias] = struct{}{}
+		normalized = append(normalized, ModelRedirect{Model: alias, TargetModel: target})
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+// ModelRedirectMap 返回 别名 -> 上游实际模型 的映射。
+func (c *Channel) ModelRedirectMap() map[string]string {
+	redirects := NormalizeModelRedirects(c.ModelRedirects)
+	if len(redirects) == 0 {
+		return nil
+	}
+	mapping := make(map[string]string, len(redirects))
+	for _, redirect := range redirects {
+		mapping[redirect.Model] = redirect.TargetModel
+	}
+	return mapping
+}
+
+// ResolveModelRedirect 将候选模型名解析为实际发往上游的模型名。
+// 未配置重定向时原样返回。
+func (c *Channel) ResolveModelRedirect(modelName string) string {
+	if c == nil {
+		return modelName
+	}
+	name := strings.TrimSpace(modelName)
+	mapping := c.ModelRedirectMap()
+	if len(mapping) == 0 {
+		return name
+	}
+	if target, ok := mapping[name]; ok {
+		return target
+	}
+	return name
+}
+
+// ExposedModelNames 返回该渠道对客户端暴露的模型名列表：
+// 未开启"仅别名"时 = Model/CustomModel + 重定向别名；
+// 开启后仅返回重定向别名（原始模型不暴露）。
+func (c *Channel) ExposedModelNames() []string {
+	if c == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	names := make([]string, 0, 4)
+	appendName := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+
+	if !c.ModelRedirectOnly {
+		for _, name := range xstrings.SplitTrimCompact(",", c.Model, c.CustomModel) {
+			appendName(name)
+		}
+	}
+	for _, redirect := range NormalizeModelRedirects(c.ModelRedirects) {
+		appendName(redirect.Model)
+	}
+	return names
+}
+
+// IsModelExposed 判断模型名是否对该渠道客户端暴露。
+func (c *Channel) IsModelExposed(modelName string) bool {
+	if c == nil {
+		return false
+	}
+	name := strings.TrimSpace(modelName)
+	for _, exposed := range c.ExposedModelNames() {
+		if exposed == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Channel) GetBaseUrl() string {

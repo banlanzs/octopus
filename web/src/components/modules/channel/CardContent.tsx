@@ -59,6 +59,9 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
             : [{ enabled: true, channel_key: '', remark: '' }],
         model: channel.model,
         custom_model: channel.custom_model,
+        tags: channel.tags ?? [],
+        model_redirects: channel.model_redirects ?? [],
+        model_redirect_only: channel.model_redirect_only ?? false,
         auto_sync: channel.auto_sync,
         force_deep_seek_thinking: channel.force_deep_seek_thinking ?? false,
         probe_enabled: channel.probe_enabled ?? false,
@@ -76,6 +79,11 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
     const headersEqual = (a: Channel['custom_header'] | undefined, b: Channel['custom_header'] | undefined) =>
         JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
 
+    const normalizeRedirects = (redirects: NonNullable<Channel['model_redirects']>) =>
+        redirects
+            .map((r) => ({ model: r.model.trim(), target_model: r.target_model.trim() }))
+            .filter((r) => r.model && r.target_model);
+
     const handleUpdate = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         const req: UpdateChannelRequest = { id: channel.id };
@@ -92,6 +100,16 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         }
         if (formData.model !== channel.model) req.model = formData.model;
         if (formData.custom_model !== channel.custom_model) req.custom_model = formData.custom_model;
+        if (JSON.stringify(formData.tags ?? []) !== JSON.stringify(channel.tags ?? [])) {
+            req.tags = formData.tags ?? [];
+        }
+        const nextRedirects = normalizeRedirects(formData.model_redirects ?? []);
+        if (JSON.stringify(nextRedirects) !== JSON.stringify(normalizeRedirects(channel.model_redirects ?? []))) {
+            req.model_redirects = nextRedirects;
+        }
+        if ((formData.model_redirect_only ?? false) !== (channel.model_redirect_only ?? false)) {
+            req.model_redirect_only = formData.model_redirect_only;
+        }
         if (formData.proxy_mode === 'pool' && !formData.proxy_config_id) {
             toast.error(tProxy('selectRequired'));
             return;

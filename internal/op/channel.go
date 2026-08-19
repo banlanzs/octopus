@@ -52,6 +52,8 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	if channel.ProxyMode == "" {
 		channel.ProxyMode = model.ProxyUsageModeDirect
 	}
+	channel.Tags = model.NormalizeChannelTags(channel.Tags)
+	channel.ModelRedirects = model.NormalizeModelRedirects(channel.ModelRedirects)
 	if err := channel.ProxyMode.Validate(false); err != nil {
 		return err
 	}
@@ -207,6 +209,18 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	if req.CustomModel != nil {
 		selectFields = append(selectFields, "custom_model")
 		updates.CustomModel = *req.CustomModel
+	}
+	if req.Tags != nil {
+		selectFields = append(selectFields, "tags")
+		updates.Tags = model.NormalizeChannelTags(*req.Tags)
+	}
+	if req.ModelRedirects != nil {
+		selectFields = append(selectFields, "model_redirects")
+		updates.ModelRedirects = model.NormalizeModelRedirects(*req.ModelRedirects)
+	}
+	if req.ModelRedirectOnly != nil {
+		selectFields = append(selectFields, "model_redirect_only")
+		updates.ModelRedirectOnly = *req.ModelRedirectOnly
 	}
 	effectiveProxyMode := existingChannel.ProxyMode
 	effectiveProxyConfigID := existingChannel.ProxyConfigID
@@ -574,6 +588,31 @@ func channelDel(id int, ctx context.Context, bypassManagedCheck bool) error {
 	return nil
 }
 
+// ChannelIDsForTags 返回所有启用中、携带任一指定标签的渠道 ID。
+// 标签已由调用方标准化；标签白名单为空时返回空集合。
+func ChannelIDsForTags(tags []string) map[int]struct{} {
+	if len(tags) == 0 {
+		return nil
+	}
+	wanted := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		wanted[tag] = struct{}{}
+	}
+	ids := make(map[int]struct{})
+	for id, channel := range channelCache.GetAll() {
+		if !channel.Enabled {
+			continue
+		}
+		for _, tag := range model.NormalizeChannelTags(channel.Tags) {
+			if _, ok := wanted[tag]; ok {
+				ids[id] = struct{}{}
+				break
+			}
+		}
+	}
+	return ids
+}
+
 func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 	channelsByID := channelCache.GetAll()
 	channelIDs := make([]int, 0, len(channelsByID))
@@ -641,7 +680,7 @@ func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 				siteGroupName = model.NormalizeSiteGroupName(siteGroupKey, "")
 			}
 		}
-		modelNames := xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel)
+		modelNames := channel.ExposedModelNames()
 		for _, modelName := range modelNames {
 			if modelName == "" {
 				continue

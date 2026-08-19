@@ -76,8 +76,8 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 	requestModel := internalRequest.Model
 	apiKeyID := c.GetInt("api_key_id")
 
-	// 获取通道分组
-	group, directRoute, err := groupForAPIKeyRequest(requestModel, c.GetString("supported_channels"), c.Request.Context())
+	// 获取通道分组（同时应用渠道白名单与标签白名单）
+	group, directRoute, err := groupForAPIKeyRequestWithRestrictions(requestModel, c.GetString("supported_channels"), supportedTagsFromContext(c), c.Request.Context())
 	if err != nil {
 		resp.ErrorWithCode(c, http.StatusNotFound, CodeRelayModelNotFound, "model not found")
 		return
@@ -252,8 +252,8 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			continue
 		}
 
-		// 设置实际模型
-		internalRequest.Model = item.ModelName
+		// 设置实际模型（应用渠道级模型重定向）
+		internalRequest.Model = channel.ResolveModelRedirect(item.ModelName)
 		// 渠道级 DeepSeek thinking 强制开关（中转站 DeepSeek 别名渠道：模型名
 		// 不含 "deepseek" 时仍按 DeepSeek thinking 语义透传）。官方 DeepSeek
 		// 端点（base_url 含 deepseek.com）自动开启，避免渠道模型名不含
@@ -577,7 +577,7 @@ func (req *relayRequest) fallbackAttempt(item dbmodel.GroupItem, group dbmodel.G
 	if req.responsesPassthroughRequired && resolvedType != outbound.OutboundTypeOpenAIResponse {
 		return attemptResult{}, false
 	}
-	req.internalRequest.Model = item.ModelName
+	req.internalRequest.Model = channel.ResolveModelRedirect(item.ModelName)
 	usedKey := channel.GetChannelKey()
 	if usedKey.ChannelKey == "" {
 		return attemptResult{}, false

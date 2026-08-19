@@ -4,7 +4,8 @@ import {
     MorphingDialogContainer,
     MorphingDialogContent,
 } from '@/components/ui/morphing-dialog';
-import { CheckCircle2, DollarSign, Key, Layers, MessageSquare, XCircle } from 'lucide-react';
+import { CheckCircle2, DollarSign, Key, Layers, MessageSquare, Tag, XCircle } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { ChannelType, type Channel, useEnableChannel } from '@/api/endpoints/channel';
 import { CardContent } from './CardContent';
@@ -28,8 +29,8 @@ export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; st
             .filter(Boolean);
 
     const modelCount = new Set([
-        ...splitModels(channel.model),
-        ...splitModels(channel.custom_model),
+        ...(channel.model_redirect_only ? [] : [...splitModels(channel.model), ...splitModels(channel.custom_model)]),
+        ...(channel.model_redirects ?? []).map((redirect) => redirect.model?.trim()).filter((name): name is string => Boolean(name)),
     ]).size;
     const enabledKeyCount = channel.keys.filter((item) => item.enabled).length;
     const typeName = ChannelType[channel.type];
@@ -73,6 +74,16 @@ export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; st
                                     <span className="inline-flex rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
                                         站点投影
                                     </span>
+                                </div>
+                            ) : null}
+                            {(channel.tags?.length ?? 0) > 0 ? (
+                                <div className="mt-1.5 flex flex-wrap gap-1">
+                                    {channel.tags.map((tag) => (
+                                        <Badge key={tag} variant="outline" className="inline-flex items-center gap-1 border-border/70 bg-background/60 px-1.5 py-0 text-[10px] text-muted-foreground">
+                                            <Tag className="size-2.5" />
+                                            {tag}
+                                        </Badge>
+                                    ))}
                                 </div>
                             ) : null}
                         </div>

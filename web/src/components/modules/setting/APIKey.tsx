@@ -75,6 +75,18 @@ function hasModel(supported: string | undefined, model: string): boolean {
     return supported ? supported.split(',').includes(model) : false;
 }
 
+function toggleTag(current: string[] | undefined, tag: string): string[] | undefined {
+    const tags = current ? [...current] : [];
+    const next = tags.includes(tag)
+        ? tags.filter((item) => item !== tag)
+        : [...tags, tag];
+    return next.length ? next : undefined;
+}
+
+function hasTag(supported: string[] | undefined, tag: string): boolean {
+    return supported ? supported.includes(tag) : false;
+}
+
 function toggleChannel(current: string | undefined, channelID: number): string | undefined {
     const value = String(channelID);
     const channels = current ? current.split(',').filter(Boolean) : [];
@@ -87,6 +99,12 @@ function toggleChannel(current: string | undefined, channelID: number): string |
 function hasChannel(supported: string | undefined, channelID: number): boolean {
     return supported ? supported.split(',').includes(String(channelID)) : false;
 }
+
+type ChannelLike = {
+    enabled: boolean;
+    model_redirect_only?: boolean;
+    model_redirects?: Array<{ model?: string; target_model?: string }>;
+};
 
 interface APIKeyFormProps {
     apiKey?: APIKey;
@@ -109,6 +127,7 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
         max_rpm: apiKey?.max_rpm,
         supported_models: apiKey?.supported_models,
         supported_channels: apiKey?.supported_channels,
+        supported_tags: apiKey?.supported_tags ?? [],
     }));
     const [maxCostInput, setMaxCostInput] = useState(() =>
         apiKey?.max_cost != null ? String(apiKey.max_cost) : ''
@@ -138,21 +157,70 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
         return ids;
     }, [form.supported_channels]);
 
+    const selectedTags = useMemo(() => {
+        return new Set(form.supported_tags ?? []);
+    }, [form.supported_tags]);
+
+    const availableTags = useMemo(() => {
+        const set = new Set<string>();
+        for (const { raw: channel } of channels) {
+            for (const tag of channel.tags ?? []) {
+                const trimmed = tag.trim();
+                if (trimmed) set.add(trimmed);
+            }
+        }
+        // 保留已选标签，避免标签从渠道上移除后徽章消失
+        for (const tag of form.supported_tags ?? []) {
+            const trimmed = tag.trim();
+            if (trimmed) set.add(trimmed);
+        }
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [channels, form.supported_tags]);
+
     const availableModels = useMemo(() => {
         const set = new Set<string>();
-        // 分组名（分组逻辑里设置的那些分组）
-        for (const g of groups) {
-            if (g.name) set.add(g.name);
+        const hasChannelFilter = selectedChannelIDs.size > 0;
+        const hasTagFilter = selectedTags.size > 0;
+        const channelsByID = new Map(channels.map(({ raw }) => [raw.id, raw]));
+        const isExposedByChannel = (channel: ChannelLike, modelName: string) => {
+            if (!channel.model_redirect_only) return true;
+            return (channel.model_redirects ?? []).some((redirect) => redirect.model?.trim() === modelName);
+        };
+        // 分组名（分组逻辑里设置的那些分组）；标签限制时后端不纳入分组，
+        // 前端也保持一致，避免展示实际不可调用的同名模型。
+        if (!hasTagFilter) {
+            for (const g of groups) {
+                if (!g.name) continue;
+                const items = g.items ?? [];
+                if (items.length === 0) {
+                    set.add(g.name);
+                    continue;
+                }
+                const visible = items.some((item) => {
+                    const channel = channelsByID.get(item.channel_id);
+                    if (!channel || !channel.enabled) return true;
+                    return isExposedByChannel(channel, item.model_name);
+                });
+                if (visible) set.add(g.name);
+            }
         }
-        // 已选渠道的自身模型（仅启用渠道，与后端可用语义一致）
-        if (selectedChannelIDs.size > 0) {
+        // 按渠道/标签限制展示渠道自身暴露的模型（遵守重定向"仅别名"开关）
+        if (hasChannelFilter || hasTagFilter) {
             for (const { raw: channel } of channels) {
-                if (!selectedChannelIDs.has(channel.id) || !channel.enabled) continue;
-                for (const field of [channel.model, channel.custom_model]) {
-                    for (const name of (field ?? '').split(',')) {
-                        const trimmed = name.trim();
-                        if (trimmed) set.add(trimmed);
+                if (!channel.enabled) continue;
+                if (hasChannelFilter && !selectedChannelIDs.has(channel.id)) continue;
+                if (hasTagFilter && !(channel.tags ?? []).some((tag) => selectedTags.has(tag))) continue;
+                if (!channel.model_redirect_only) {
+                    for (const field of [channel.model, channel.custom_model]) {
+                        for (const name of (field ?? '').split(',')) {
+                            const trimmed = name.trim();
+                            if (trimmed) set.add(trimmed);
+                        }
                     }
+                }
+                for (const redirect of channel.model_redirects ?? []) {
+                    const alias = redirect.model?.trim();
+                    if (alias) set.add(alias);
                 }
             }
         }
@@ -162,7 +230,7 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
             if (trimmed) set.add(trimmed);
         }
         return Array.from(set).sort((a, b) => a.localeCompare(b));
-    }, [groups, channels, selectedChannelIDs, form.supported_models]);
+    }, [groups, channels, selectedChannelIDs, selectedTags, form.supported_models]);
 
     const availableChannels = useMemo(() => {
         return channels
@@ -420,6 +488,43 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
                     )}
                 </div>
                 <div className="text-[11px] text-muted-foreground/80">{t('apiKey.form.modelsHint')}</div>
+            </div>
+
+            <div className="grid gap-1">
+                <div className="text-xs text-muted-foreground">{t('apiKey.form.supportedTags')}</div>
+                <div className="max-h-40 overflow-auto rounded-xl p-2">
+                    {availableTags.length === 0 ? (
+                        <div className="text-xs text-muted-foreground py-2 text-center">
+                            {t('apiKey.form.noTags')}
+                        </div>
+                    ) : (
+                        <div className="flex flex-wrap gap-2">
+                            {availableTags.map((tag) => {
+                                const checked = hasTag(form.supported_tags, tag);
+                                return (
+                                    <button
+                                        key={tag}
+                                        type="button"
+                                        disabled={isPending}
+                                        onClick={() => updateForm({ supported_tags: toggleTag(form.supported_tags, tag) })}
+                                        className="text-left disabled:opacity-50"
+                                    >
+                                        <Badge
+                                            variant={checked ? 'default' : 'outline'}
+                                            className={cn(
+                                                'cursor-pointer select-none',
+                                                !checked && 'bg-background/40 hover:bg-background/70'
+                                            )}
+                                        >
+                                            {tag}
+                                        </Badge>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+                <div className="text-[11px] text-muted-foreground/80">{t('apiKey.form.tagsHint')}</div>
             </div>
 
             <div className="grid gap-1">

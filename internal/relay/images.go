@@ -106,7 +106,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 	}
 
 	// 获取通道分组
-	group, _, err := groupForAPIKeyRequest(requestModel, c.GetString("supported_channels"), ctx)
+	group, _, err := groupForAPIKeyRequestWithRestrictions(requestModel, c.GetString("supported_channels"), supportedTagsFromContext(c), ctx)
 	if err != nil {
 		resp.ErrorWithCode(c, http.StatusNotFound, CodeRelayModelNotFound, "model not found")
 		return
@@ -155,6 +155,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 			continue
 		}
 		schedulingExempt := channel.SchedulingExempt
+		actualModel := channel.ResolveModelRedirect(item.ModelName)
 
 		// channel.Type 限制：仅 OpenAI Chat/Responses（auto 渠道按 OpenAI 格式处理）
 		if channel.Type != outbound.OutboundTypeOpenAIChat && channel.Type != outbound.OutboundTypeOpenAIResponse && !outbound.IsAutoType(channel.Type) {
@@ -174,14 +175,14 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 		}
 
 		log.Debugf("images request model %s, mode: %d, forwarding to channel: %s model: %s (attempt %d/%d, sticky=%t, stream=%t)",
-			requestModel, group.Mode, channel.Name, item.ModelName,
+			requestModel, group.Mode, channel.Name, actualModel,
 			iter.Index()+1, iter.Len(), iter.IsSticky(), stream)
 
 		candidateStartedAt := time.Now()
 		span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name, item.ModelName)
 
 		// 尝试一次转发
-		statusCode, written, usage, upstreamCT, fwdErr := imagesAttempt(ctx, endpoint, c, bc, isMultipart, boundary, jsonPayload, stream, channel, usedKey.ChannelKey, group.FirstTokenTimeOut, metrics, item.ModelName, hb)
+		statusCode, written, usage, upstreamCT, fwdErr := imagesAttempt(ctx, endpoint, c, bc, isMultipart, boundary, jsonPayload, stream, channel, usedKey.ChannelKey, group.FirstTokenTimeOut, metrics, actualModel, hb)
 		durationMS := time.Since(candidateStartedAt).Milliseconds()
 		ttfbMS := durationMS
 		if !metrics.FirstToken.IsZero() && !metrics.FirstToken.Before(candidateStartedAt) {

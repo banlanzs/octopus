@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/op"
 )
 
 func TestParseSupportedChannelIDs(t *testing.T) {
@@ -81,4 +82,115 @@ func TestRestrictGroupChannels(t *testing.T) {
 			t.Fatalf("items = %v, want empty", got.Items)
 		}
 	})
+}
+
+func TestGroupForAPIKeyRequestWithTagsBypassesGroupsAndAppliesRedirect(t *testing.T) {
+	ctx := setupRelayTestDB(t)
+
+	tagged := &dbmodel.Channel{
+		Name:              "tagged-redirect-channel",
+		Type:              0,
+		Enabled:           true,
+		Model:             "gpt-4o",
+		Tags:              []string{"prod"},
+		ModelRedirects:    []dbmodel.ModelRedirect{{Model: "fast-gpt", TargetModel: "gpt-4o"}},
+		ModelRedirectOnly: true,
+	}
+	if err := op.ChannelCreate(tagged, ctx); err != nil {
+		t.Fatalf("ChannelCreate(tagged) failed: %v", err)
+	}
+	untagged := &dbmodel.Channel{
+		Name:    "untagged-direct-channel",
+		Type:    0,
+		Enabled: true,
+		Model:   "gpt-4o",
+	}
+	if err := op.ChannelCreate(untagged, ctx); err != nil {
+		t.Fatalf("ChannelCreate(untagged) failed: %v", err)
+	}
+
+	// 同名分组必须被标签路由忽略，不能把分组里的渠道纳入请求。
+	if err := op.GroupCreate(&dbmodel.Group{
+		Name: "fast-gpt",
+		Mode: dbmodel.GroupModeRoundRobin,
+		Items: []dbmodel.GroupItem{
+			{ChannelID: untagged.ID, ModelName: "gpt-4o", Weight: 1},
+		},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+
+	group, direct, err := groupForAPIKeyRequestWithRestrictions("fast-gpt", "", []string{"prod"}, ctx)
+	if err != nil {
+		t.Fatalf("groupForAPIKeyRequestWithRestrictions failed: %v", err)
+	}
+	if !direct {
+		t.Fatalf("tag-restricted route should be direct, got group route")
+	}
+	if len(group.Items) != 1 {
+		t.Fatalf("items = %v, want one tagged channel", group.Items)
+	}
+	if group.Items[0].ChannelID != tagged.ID || group.Items[0].ModelName != "fast-gpt" {
+		t.Fatalf("item = %+v, want channel=%d model=fast-gpt", group.Items[0], tagged.ID)
+	}
+
+	// 仅暴露别名时，原始模型不可通过标签渠道直连。
+	group, _, err = groupForAPIKeyRequestWithRestrictions("gpt-4o", "", []string{"prod"}, ctx)
+	if err != nil {
+		t.Fatalf("groupForAPIKeyRequestWithRestrictions failed: %v", err)
+	}
+	if len(group.Items) != 0 {
+		t.Fatalf("original model should be hidden for redirect-only channel, items = %v", group.Items)
+	}
+}
+
+func TestGroupForAPIKeyRequestFiltersRedirectOnlyOriginalGroupItems(t *testing.T) {
+	ctx := setupRelayTestDB(t)
+
+	channel := &dbmodel.Channel{
+		Name:              "redirect-group-channel",
+		Type:              0,
+		Enabled:           true,
+		Model:             "gpt-4o",
+		ModelRedirects:    []dbmodel.ModelRedirect{{Model: "fast-gpt", TargetModel: "gpt-4o"}},
+		ModelRedirectOnly: true,
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+
+	if err := op.GroupCreate(&dbmodel.Group{
+		Name: "fast-gpt",
+		Mode: dbmodel.GroupModeRoundRobin,
+		Items: []dbmodel.GroupItem{
+			{ChannelID: channel.ID, ModelName: "fast-gpt", Weight: 1},
+		},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate(alias) failed: %v", err)
+	}
+	if err := op.GroupCreate(&dbmodel.Group{
+		Name: "gpt-4o",
+		Mode: dbmodel.GroupModeRoundRobin,
+		Items: []dbmodel.GroupItem{
+			{ChannelID: channel.ID, ModelName: "gpt-4o", Weight: 1},
+		},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate(original) failed: %v", err)
+	}
+
+	aliasGroup, _, err := groupForAPIKeyRequest("fast-gpt", "", ctx)
+	if err != nil {
+		t.Fatalf("groupForAPIKeyRequest(alias) failed: %v", err)
+	}
+	if len(aliasGroup.Items) != 1 || aliasGroup.Items[0].ModelName != "fast-gpt" {
+		t.Fatalf("alias group items = %v, want alias item", aliasGroup.Items)
+	}
+
+	originalGroup, _, err := groupForAPIKeyRequest("gpt-4o", "", ctx)
+	if err != nil {
+		t.Fatalf("groupForAPIKeyRequest(original) failed: %v", err)
+	}
+	if len(originalGroup.Items) != 0 {
+		t.Fatalf("original group items = %v, want empty", originalGroup.Items)
+	}
 }

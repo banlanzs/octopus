@@ -458,7 +458,10 @@
                 "cancel": "取消",
                 "create": "创建",
                 "save": "保存",
-                "confirm": "确认"
+                "confirm": "确认",
+                "supportedTags": "支持标签",
+                "noTags": "暂无可用标签",
+                "tagsHint": "选择标签后，密钥只能调用带有任一指定标签的渠道所暴露的模型；不包含分组同名模型。"
             },
             "stats": {
                 "noData": "暂无统计数据",
@@ -1027,7 +1030,17 @@
             "batchImportSuccess": "已导入 {count} 个 API Key",
             "batchImportDuplicates": "已跳过 {count} 个重复 API Key",
             "batchImportFailed": "导入失败：{message}",
-            "remark": "备注"
+            "remark": "备注",
+            "modelRedirect": "模型重定向",
+            "modelRedirectAdd": "添加重定向",
+            "modelRedirectHint": "别名模型 → 上游实际模型：请求别名时，实际转发到目标模型。",
+            "modelRedirectAlias": "别名模型（对外暴露）",
+            "modelRedirectTarget": "上游实际模型",
+            "modelRedirectRemove": "移除重定向",
+            "modelRedirectOnly": "仅暴露别名模型",
+            "modelRedirectOnlyHint": "开启后，渠道配置的原始模型不会出现在 /v1/models 与渠道模型列表中。",
+            "tags": "标签",
+            "tagsPlaceholder": "输入标签后回车"
         }
     },
     "siteChannel": {

@@ -13,6 +13,9 @@ var apiKeyCache = cache.New[int, model.APIKey](16)
 var apiKeyIDMap = cache.New[string, int](16)
 
 func APIKeyCreate(key *model.APIKey, ctx context.Context) error {
+	if key != nil {
+		key.SupportedTags = model.NormalizeAPIKeyTags(key.SupportedTags)
+	}
 	if err := db.GetDB().WithContext(ctx).Create(key).Error; err != nil {
 		return fmt.Errorf("failed to create API key: %w", err)
 	}
@@ -25,6 +28,9 @@ func APIKeyUpdate(key *model.APIKey, ctx context.Context) error {
 	existing, ok := apiKeyCache.Get(key.ID)
 	if !ok {
 		return fmt.Errorf("API key not found")
+	}
+	if key != nil {
+		key.SupportedTags = model.NormalizeAPIKeyTags(key.SupportedTags)
 	}
 	if err := db.GetDB().WithContext(ctx).Omit("api_key").Save(key).Error; err != nil {
 		return fmt.Errorf("failed to update API key: %w", err)

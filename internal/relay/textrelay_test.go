@@ -1127,3 +1127,84 @@ func TestTextHandlerDirectRoutePrefersClientResponseFormat(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestTextHandlerTagRouteBypassesGroupAndAppliesModelRedirect(t *testing.T) {
+	if dbpkg.GetDB() != nil {
+		_ = dbpkg.Close()
+	}
+	dbPath := filepath.Join(t.TempDir(), "textrelay-tag-redirect.db")
+	if err := dbpkg.InitDB("sqlite", dbPath, false); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbpkg.Close() })
+
+	var untaggedHits atomic.Int32
+	untaggedUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		untaggedHits.Add(1)
+		http.Error(w, "group route must be bypassed", http.StatusInternalServerError)
+	}))
+	defer untaggedUpstream.Close()
+
+	var upstreamModel atomic.Value
+	taggedUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		upstreamModel.Store(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-tag","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"tagged ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}`))
+	}))
+	defer taggedUpstream.Close()
+
+	ctx := context.Background()
+	untagged := &model.Channel{
+		Name:     "textrelay-tag-untagged",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: untaggedUpstream.URL}},
+		Model:    "gpt-4o",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "untagged-key"}},
+	}
+	if err := op.ChannelCreate(untagged, ctx); err != nil {
+		t.Fatalf("ChannelCreate(untagged) failed: %v", err)
+	}
+	tagged := &model.Channel{
+		Name:              "textrelay-tag-tagged",
+		Type:              outbound.OutboundTypeOpenAIChat,
+		Enabled:           true,
+		BaseUrls:          []model.BaseUrl{{URL: taggedUpstream.URL}},
+		Model:             "gpt-4o",
+		Tags:              []string{"prod"},
+		ModelRedirects:    []model.ModelRedirect{{Model: "fast-gpt", TargetModel: "gpt-4o"}},
+		ModelRedirectOnly: true,
+		Keys:              []model.ChannelKey{{Enabled: true, ChannelKey: "tagged-key"}},
+	}
+	if err := op.ChannelCreate(tagged, ctx); err != nil {
+		t.Fatalf("ChannelCreate(tagged) failed: %v", err)
+	}
+
+	// 同名分组指向未打标签渠道：标签路由必须绕开分组，不能命中它。
+	if err := op.GroupCreate(&model.Group{
+		Name: "fast-gpt",
+		Mode: model.GroupModeFailover,
+		Items: []model.GroupItem{
+			{ChannelID: untagged.ID, ModelName: "gpt-4o", Priority: 1, Weight: 1},
+		},
+	}, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"fast-gpt","messages":[{"role":"user","content":"hi"}]}`)
+	c.Set("supported_tags", []string{"prod"})
+
+	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	if got := untaggedHits.Load(); got != 0 {
+		t.Fatalf("group channel received %d request(s), want 0", got)
+	}
+	if body, ok := upstreamModel.Load().([]byte); !ok || !strings.Contains(string(body), `"model":"gpt-4o"`) {
+		t.Fatalf("upstream model not redirected: %s", body)
+	}
+}

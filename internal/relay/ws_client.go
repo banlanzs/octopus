@@ -53,6 +53,7 @@ func HandleWSResponse(c *gin.Context) {
 	apiKeyID := c.GetInt("api_key_id")
 	supportedModels := c.GetString("supported_models")
 	supportedChannels := c.GetString("supported_channels")
+	supportedTags := supportedTagsFromContext(c)
 
 	log.Debugf("ws client connected (apikey=%d)", apiKeyID)
 
@@ -99,7 +100,7 @@ func HandleWSResponse(c *gin.Context) {
 			continue
 		}
 
-		conversationState = processWSResponseCreate(ctx, conn, data, apiKeyID, supportedModels, supportedChannels, downstreamSessionID, conversationState)
+		conversationState = processWSResponseCreate(ctx, conn, data, apiKeyID, supportedModels, supportedChannels, supportedTags, downstreamSessionID, conversationState)
 	}
 }
 
@@ -110,6 +111,7 @@ func processWSResponseCreate(
 	apiKeyID int,
 	supportedModels string,
 	supportedChannels string,
+	supportedTags []string,
 	downstreamSessionID string,
 	conversationState *wsConversationState,
 ) *wsConversationState {
@@ -160,7 +162,7 @@ func processWSResponseCreate(
 	if genRaw, ok := reqBody["generate"]; ok {
 		var generate bool
 		if json.Unmarshal(genRaw, &generate) == nil && !generate {
-			if err := bestEffortWarmupUpstreamWS(ctx, apiKeyID, supportedModels, supportedChannels, reqBody); err != nil {
+			if err := bestEffortWarmupUpstreamWS(ctx, apiKeyID, supportedModels, supportedChannels, supportedTags, reqBody); err != nil {
 				log.Warnf("ws warmup failed (apikey=%d): %v", apiKeyID, err)
 			} else {
 				log.Debugf("ws warmup ready (apikey=%d)", apiKeyID)
@@ -224,7 +226,7 @@ func processWSResponseCreate(
 	}
 
 	requestModel = executionRequest.Model
-	req, group, err := newWSRelayRequest(ctx, conn, inAdapter, apiKeyID, requestModel, cloneInternalRequest(executionRequest), originalRequest, preferredSticky, bodyBytes, supportedChannels)
+	req, group, err := newWSRelayRequest(ctx, conn, inAdapter, apiKeyID, requestModel, cloneInternalRequest(executionRequest), originalRequest, preferredSticky, bodyBytes, supportedChannels, supportedTags)
 	if err != nil {
 		status := 404
 		code := "model_not_found"
@@ -258,7 +260,7 @@ func processWSResponseCreate(
 			apiKeyID, requestModel, failedPreviousResponseID, result.ResetConversation)
 		balancer.DeleteSticky(apiKeyID, requestModel)
 		replayedRequest := conversationState.BuildReplayRequest(originalRequest)
-		replayReq, replayGroup, replayErr := newWSRelayRequest(ctx, conn, inAdapter, apiKeyID, requestModel, replayedRequest, originalRequest, preferredSticky, bodyBytes, supportedChannels)
+		replayReq, replayGroup, replayErr := newWSRelayRequest(ctx, conn, inAdapter, apiKeyID, requestModel, replayedRequest, originalRequest, preferredSticky, bodyBytes, supportedChannels, supportedTags)
 		if replayErr == nil {
 			replayReq.metrics.SetWSMode(dbmodel.RelayLogWSModeReplay)
 			replayReq.metrics.SetWSRecovery(dbmodel.RelayLogWSRecoveryReplay)
@@ -305,6 +307,7 @@ func bestEffortWarmupUpstreamWS(
 	apiKeyID int,
 	supportedModels string,
 	supportedChannels string,
+	supportedTags []string,
 	reqBody map[string]json.RawMessage,
 ) error {
 	requestModel := strings.TrimSpace(extractWSRequestModel(reqBody))
@@ -326,7 +329,7 @@ func bestEffortWarmupUpstreamWS(
 		}
 	}
 
-	group, _, err := groupForAPIKeyRequest(requestModel, supportedChannels, ctx)
+	group, _, err := groupForAPIKeyRequestWithRestrictions(requestModel, supportedChannels, supportedTags, ctx)
 	if err != nil {
 		return fmt.Errorf("model not found")
 	}
@@ -421,8 +424,9 @@ func newWSRelayRequest(
 	preferredSticky *balancer.SessionEntry,
 	rawBody []byte,
 	supportedChannels string,
+	supportedTags []string,
 ) (*relayRequest, *dbmodel.Group, error) {
-	group, _, err := groupForAPIKeyRequest(requestModel, supportedChannels, ctx)
+	group, _, err := groupForAPIKeyRequestWithRestrictions(requestModel, supportedChannels, supportedTags, ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("model not found")
 	}
@@ -523,7 +527,7 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 			continue
 		}
 
-		req.internalRequest.Model = item.ModelName
+		req.internalRequest.Model = channel.ResolveModelRedirect(item.ModelName)
 
 		selectOpts := dbmodel.ChannelKeySelectOptions{
 			ExcludeKeyIDs:  make(map[int]struct{}),

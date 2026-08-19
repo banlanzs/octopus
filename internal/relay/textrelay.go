@@ -96,7 +96,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 	}
 
 	// 分组与迭代器（选通道），与现有 relay 保持一致。
-	group, directRoute, err := groupForAPIKeyRequest(llmReq.Model, c.GetString("supported_channels"), ctx)
+	group, directRoute, err := groupForAPIKeyRequestWithRestrictions(llmReq.Model, c.GetString("supported_channels"), supportedTagsFromContext(c), ctx)
 	if err != nil {
 		resp.Error(c, http.StatusNotFound, "model not found")
 		return
@@ -136,6 +136,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 			continue
 		}
 		schedulingExempt := channel.SchedulingExempt
+		actualModel := channel.ResolveModelRedirect(item.ModelName)
 		usedKey := channel.GetChannelKey()
 		if usedKey.ChannelKey == "" {
 			iter.Skip(channel.ID, 0, channel.Name, "no available key")
@@ -241,7 +242,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 
 					// 流式直通：SSE 字节透传 + sidecar 聚合 usage。
 					if isStream {
-						usage, perr := passthroughAnthropicStream(ctx, channel, usedKey, httpReq.Body, item.ModelName, c, inAdapter)
+						usage, perr := passthroughAnthropicStream(ctx, channel, usedKey, httpReq.Body, actualModel, c, inAdapter)
 						if perr != nil {
 							sc := axonErrorStatusCode(perr)
 							if autoChannel {
@@ -268,9 +269,9 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 						}
 						span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
 						if usage != nil {
-							metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: item.ModelName}, item.ModelName, channel.ID)
+							metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: actualModel}, actualModel, channel.ID)
 						} else {
-							metrics.ActualModel = item.ModelName
+							metrics.ActualModel = actualModel
 						}
 						recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
 						if autoChannel {
@@ -280,7 +281,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 						return
 					}
 
-					sc, llmResp, perr := passthroughAnthropicNonStream(ctx, channel, usedKey, httpReq.Body, item.ModelName, c, outAdapter)
+					sc, llmResp, perr := passthroughAnthropicNonStream(ctx, channel, usedKey, httpReq.Body, actualModel, c, outAdapter)
 					if perr != nil {
 						if autoChannel && ShouldFallbackProtocol(sc, perr.Error(), false) {
 							span.End(dbmodel.AttemptFailed, sc, perr.Error())
@@ -300,9 +301,9 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 					}
 					span.End(dbmodel.AttemptSuccess, sc, "")
 					if llmResp != nil {
-						metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
+						metrics.SetAxonResponse(llmResp, actualModel, channel.ID)
 					} else {
-						metrics.ActualModel = item.ModelName
+						metrics.ActualModel = actualModel
 					}
 					recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, sc)
 					if llmResp != nil && llmResp.Usage != nil && !schedulingExempt {
@@ -320,7 +321,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				// 同格式直通（openai chat/responses/embedding）：保留客户端原始
 				// 请求字节与协议协商头，避免上游将网关识别为非官方客户端。
 				if isOpenAIRawPassthrough(format, channelType) {
-					outReq, err := buildOpenAIRawPassthroughRequest(ctx, httpReq, channel, usedKey, item.ModelName, isStream, format)
+					outReq, err := buildOpenAIRawPassthroughRequest(ctx, httpReq, channel, usedKey, actualModel, isStream, format)
 					if err != nil {
 						lastAttemptErr = err
 						break
@@ -363,9 +364,9 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 						}
 						span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
 						if usage != nil {
-							metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: item.ModelName}, item.ModelName, channel.ID)
+							metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: actualModel}, actualModel, channel.ID)
 						} else {
-							metrics.ActualModel = item.ModelName
+							metrics.ActualModel = actualModel
 						}
 						recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
 						if autoChannel {
@@ -395,9 +396,9 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 					}
 					span.End(dbmodel.AttemptSuccess, sc, "")
 					if llmResp != nil {
-						metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
+						metrics.SetAxonResponse(llmResp, actualModel, channel.ID)
 					} else {
-						metrics.ActualModel = item.ModelName
+						metrics.ActualModel = actualModel
 					}
 					recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, sc)
 
@@ -417,7 +418,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				}
 
 				// 每次尝试都把统一请求的模型名改为本次候选的上游模型。
-				llmReq.Model = item.ModelName
+				llmReq.Model = actualModel
 
 				outReq, err := outAdapter.TransformRequest(ctx, llmReq)
 				if err != nil {
@@ -483,9 +484,9 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 					}
 					span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
 					if usage != nil {
-						metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: item.ModelName}, item.ModelName, channel.ID)
+						metrics.SetAxonResponse(&llm.Response{Usage: usage, Model: actualModel}, actualModel, channel.ID)
 					} else {
-						metrics.ActualModel = item.ModelName
+						metrics.ActualModel = actualModel
 					}
 					recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
 					if autoChannel {
@@ -554,7 +555,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				}
 
 				span.End(dbmodel.AttemptSuccess, http.StatusOK, "")
-				metrics.SetAxonResponse(llmResp, item.ModelName, channel.ID)
+				metrics.SetAxonResponse(llmResp, actualModel, channel.ID)
 
 				// 渠道健康闭环：成功样本 + 熔断/粘性/统计，随后质量检测（可能追加失败样本）。
 				recordAxonSuccess(group, channel, usedKey, metrics, span, item.ModelName, http.StatusOK)
