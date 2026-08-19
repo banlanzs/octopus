@@ -166,7 +166,7 @@ func protocolCandidates(channelType outbound.OutboundType, clientProtocol string
 // 不支持），命中即可安全地换一个协议重放请求。能力协商事件不记失败、不冷却。
 //
 // 判定表（对齐 ccload util/classifier.go）：
-//   - 400：响应未提交时直接算（可安全重放到另一协议）；
+//   - 400：响应未提交、且非「参数取值被拒」时算；
 //   - 403：仅当为 Cloudflare 拦截页；
 //   - 405：算；
 //   - 404：仅当非「模型不可用」（模型不存在是客户端/渠道配置问题，换协议无意义）；
@@ -177,7 +177,7 @@ func ShouldFallbackProtocol(statusCode int, bodyText string, written bool) bool 
 	}
 	switch statusCode {
 	case 400:
-		return true
+		return !isRequestParameterRejection(bodyText)
 	case 403:
 		return isCloudflareBlockPage(bodyText)
 	case 405:
@@ -187,6 +187,29 @@ func ShouldFallbackProtocol(statusCode int, bodyText string, written bool) bool 
 	default:
 		return false
 	}
+}
+
+// isRequestParameterRejection 判断 400 响应体是否为「上游拒绝某个请求参数的取值」。
+// 命中则不换协议：同样的参数会被下一个候选协议再次拒绝，换协议只是把同一个错误
+// 在每个候选上重放一遍，还会掩盖真正的病因（通常是网关侧请求构造问题）。
+// 与 404 的 isModelUnavailableResponse 同一思路。
+//
+// 只匹配明确指向「具体参数取值非法」的措辞，不做宽泛匹配（例如不匹配
+// invalid_request_error 这类同时覆盖端点/格式错误的通用类型）：漏判只是维持既有
+// 换协议行为，误判则会让真正的协议不支持失去兜底能力。
+func isRequestParameterRejection(bodyText string) bool {
+	lower := strings.ToLower(bodyText)
+	for _, marker := range []string{
+		"must be one of",    // OpenAI / DeepSeek 等的枚举校验
+		"is not one of",     // JSON Schema 风格校验
+		"invalid value for", // 常见兼容层
+		"unsupported value", // 常见兼容层
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isModelUnavailableResponse 判断 404 响应体是否表明「模型不存在」（而非端点不存在）。

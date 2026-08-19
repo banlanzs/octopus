@@ -200,6 +200,9 @@ func TestShouldFallbackProtocol(t *testing.T) {
 	}{
 		{"400 unwritten", 400, "", false, true},
 		{"400 written", 400, "", true, false},
+		{"400 param rejection", 400, "{\"error\":{\"message\":\"'reasoning_effort' must be one of: 'low', 'medium', 'high', 'xhigh', 'max'\"}}", false, false},
+		{"400 unsupported value", 400, "{\"error\":{\"message\":\"unsupported value: 'none' for parameter 'reasoning_effort'\"}}", false, false},
+		{"400 endpoint mismatch", 400, "{\"error\":{\"message\":\"invalid request format\"}}", false, true},
 		{"403 business", 403, "{\"error\":{\"message\":\"forbidden\"}}", false, false},
 		{"403 cloudflare block", 403, "<html>Attention Required! | Cloudflare</html>", false, true},
 		{"403 cf-ray", 403, "cf-ray: 12345", false, true},
@@ -220,6 +223,34 @@ func TestShouldFallbackProtocol(t *testing.T) {
 		}
 	}
 }
+// TestIsRequestParameterRejection 上游拒绝具体参数取值时不应换协议：同样的参数
+// 会被下一个协议再次拒绝，只是把同一个错误在每个候选上重放一遍。
+func TestIsRequestParameterRejection(t *testing.T) {
+	rejections := []string{
+		"'reasoning_effort' must be one of: 'low', 'medium', 'high', 'xhigh', 'max'",
+		"temperature is not one of the allowed values",
+		"Invalid value for 'top_p'",
+		"unsupported value: 'none'",
+	}
+	for _, body := range rejections {
+		if !isRequestParameterRejection(body) {
+			t.Fatalf("param rejection not detected: %q", body)
+		}
+	}
+	// 端点/协议层面的 400 必须保持换协议能力，不能被宽泛匹配吞掉。
+	passthrough := []string{
+		"",
+		"Not Found",
+		"{\"error\":{\"message\":\"invalid request format\"}}",
+		"{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"unexpected endpoint\"}}",
+	}
+	for _, body := range passthrough {
+		if isRequestParameterRejection(body) {
+			t.Fatalf("non-parameter 400 misclassified: %q", body)
+		}
+	}
+}
+
 func TestIsModelUnavailableResponse(t *testing.T) {
 	if !isModelUnavailableResponse("{\"error\":{\"code\":\"model_not_found\"}}") {
 		t.Fatal("model_not_found should be detected")
