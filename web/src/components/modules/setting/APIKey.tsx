@@ -127,10 +127,42 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
     });
     const [expireOpen, setExpireOpen] = useState(false);
 
+    const selectedChannelIDs = useMemo(() => {
+        const ids = new Set<number>();
+        for (const part of (form.supported_channels ?? '').split(',')) {
+            const trimmed = part.trim();
+            if (!trimmed) continue;
+            const id = Number(trimmed);
+            if (Number.isInteger(id) && id > 0) ids.add(id);
+        }
+        return ids;
+    }, [form.supported_channels]);
+
     const availableModels = useMemo(() => {
-        const names = groups.map((g) => g.name).filter(Boolean);
-        return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
-    }, [groups]);
+        const set = new Set<string>();
+        // 分组名（分组逻辑里设置的那些分组）
+        for (const g of groups) {
+            if (g.name) set.add(g.name);
+        }
+        // 已选渠道的自身模型（仅启用渠道，与后端可用语义一致）
+        if (selectedChannelIDs.size > 0) {
+            for (const { raw: channel } of channels) {
+                if (!selectedChannelIDs.has(channel.id) || !channel.enabled) continue;
+                for (const field of [channel.model, channel.custom_model]) {
+                    for (const name of (field ?? '').split(',')) {
+                        const trimmed = name.trim();
+                        if (trimmed) set.add(trimmed);
+                    }
+                }
+            }
+        }
+        // 保留已勾选模型，避免切换渠道或编辑旧数据时徽章消失
+        for (const part of (form.supported_models ?? '').split(',')) {
+            const trimmed = part.trim();
+            if (trimmed) set.add(trimmed);
+        }
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [groups, channels, selectedChannelIDs, form.supported_models]);
 
     const availableChannels = useMemo(() => {
         return channels
