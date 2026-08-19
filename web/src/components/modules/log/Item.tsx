@@ -694,7 +694,10 @@ function TruncatedDetailPre({ text }: { text: string }) {
 // - 成功尝试：导出原本日志的完整记录（入站请求头 → 入站请求体 → 响应体），
 //   与卡片上的请求/响应面板一致，避免遗漏响应体。
 // - 失败尝试：导出失败详情（出站请求头 → 出站请求体 → 失败响应体），
-//   用于排查网关实际发送给上游的形态。
+//   用于排查网关实际发送给上游的形态。失败详情为空时（开关关闭）回退到日志级
+//   字段，并用 *_source 字段标注来源——回退内容是整个请求的入站体与最终响应，
+//   不标注会被误读成该次尝试的真实收发。
+//   msg / channel_id / channel_key_id 一并导出：msg 往往是唯一的失败原因线索。
 function ExportAttemptButton({ attempt, log }: { attempt: MergedAttempt; log: RelayLog }) {
     const t = useTranslations('log.card');
 
@@ -710,10 +713,19 @@ function ExportAttemptButton({ attempt, log }: { attempt: MergedAttempt; log: Re
         const isSuccess = attempt.status === 'success';
         const base = {
             channel_name: attempt.channel_name,
+            channel_id: attempt.channel_id,
+            channel_key_id: attempt.channel_key_id ?? null,
             model_name: attempt.model_name,
             attempt_num: attempt.attempt_num,
             status: attempt.status,
             duration_ms: attempt.totalDuration,
+            // 错误原因导出原始值（不经 sanitizeErrorMessage）：卡片上的展示做了
+            // HTML 剥离与前缀改写，排查时需要的是上游返回的原文。
+            msg: attempt.msg ?? '',
+            // 相邻的同渠道/同 key/同错误尝试在卡片上会被合并，导出需说明这条代表几次。
+            ...(attempt.repeat > 1
+                ? { merged_attempts: attempt.repeat, last_attempt_num: attempt.lastAttemptNum }
+                : {}),
         };
         const payload = isSuccess
             ? {
@@ -727,7 +739,12 @@ function ExportAttemptButton({ attempt, log }: { attempt: MergedAttempt; log: Re
                   request_headers: parseJson(attempt.outbound_headers),
                   inbound_request_headers: parseJson(log.request_headers),
                   request_body: attempt.request_body || log.request_content || '',
+                  // 标注每个 body 的真实来源。回退到日志级字段时，内容是「整个请求的
+                  // 入站体 / 最终响应」而非这次尝试的实际收发——不标注会让导出文件看起来
+                  // 像是该次尝试的真实形态，严重误导排查方向。
+                  request_body_source: attempt.request_body ? 'attempt_outbound' : 'relay_log_inbound_fallback',
                   response_body: attempt.response_body || log.response_content || '',
+                  response_body_source: attempt.response_body ? 'attempt_upstream' : 'relay_log_final_fallback',
               };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
