@@ -72,18 +72,33 @@ func isAnthropicPassthrough(format llm.APIFormat, channelType llm.APIFormat) boo
 	return format == llm.APIFormatAnthropicMessage && channelType == llm.APIFormatAnthropicMessage
 }
 
-// isOpenAIResponsesPassthrough 判断是否可做 openai responses → openai responses
-// 同格式直通。Codex 客户端对 Responses 协议的扩展字段（additional_tools、
-// client_metadata、原生 tool_choice 等）无法被统一模型完全表示，同格式路径必须
-// 保留原始请求字节，仅重写顶层 model。
-func isOpenAIResponsesPassthrough(format llm.APIFormat, channelType llm.APIFormat) bool {
-	return format == llm.APIFormatOpenAIResponse && channelType == llm.APIFormatOpenAIResponse
+// openAIRawPassthroughPaths 定义 OpenAI 系同格式直通的出站端点。
+// 与 axonhub 各 outbound transformer 的 buildFullRequestURL 保持一致。
+var openAIRawPassthroughPaths = map[llm.APIFormat]string{
+	llm.APIFormatOpenAIChatCompletion: "/chat/completions",
+	llm.APIFormatOpenAIResponse:       "/responses",
+	llm.APIFormatOpenAIEmbedding:      "/embeddings",
 }
 
-// buildResponsesPassthroughRequest 构造 responses 直通出站请求。
+// isOpenAIRawPassthrough 判断 OpenAI 系请求是否可做同格式直通。
+// Codex / 各 OpenAI 兼容客户端可能携带统一模型无法表示的原生扩展字段，
+// 同格式路径保留原始请求字节（仅重写顶层 model）比 round-trip 更保真。
+func isOpenAIRawPassthrough(format llm.APIFormat, channelType llm.APIFormat) bool {
+	if format != channelType {
+		return false
+	}
+	_, ok := openAIRawPassthroughPaths[format]
+	return ok
+}
+
+// buildOpenAIRawPassthroughRequest 构造 OpenAI 系同格式直通出站请求。
 // 处理顺序与 axonhub pipeline.processRequest 对齐：
 // 生成器请求 → 合并客户端原始请求（Codex 协商头）→ 固化鉴权 → 渠道覆盖。
-func buildResponsesPassthroughRequest(ctx context.Context, inReq *httpclient.Request, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, modelName string, stream bool) (*httpclient.Request, error) {
+func buildOpenAIRawPassthroughRequest(ctx context.Context, inReq *httpclient.Request, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, modelName string, stream bool, format llm.APIFormat) (*httpclient.Request, error) {
+	endpoint, ok := openAIRawPassthroughPaths[format]
+	if !ok {
+		return nil, fmt.Errorf("unsupported openai passthrough format: %s", format)
+	}
 	if inReq == nil || len(inReq.Body) == 0 {
 		return nil, fmt.Errorf("raw request body is empty")
 	}
@@ -95,12 +110,12 @@ func buildResponsesPassthroughRequest(ctx context.Context, inReq *httpclient.Req
 
 	outReq := &httpclient.Request{
 		Method:                http.MethodPost,
-		URL:                   strings.TrimSuffix(channel.GetBaseUrl(), "/") + "/responses",
+		URL:                   strings.TrimSuffix(channel.GetBaseUrl(), "/") + endpoint,
 		Headers:               make(http.Header),
 		Body:                  body,
 		Auth:                  &httpclient.AuthConfig{Type: httpclient.AuthTypeBearer, APIKey: usedKey.ChannelKey},
-		APIFormat:             string(llm.APIFormatOpenAIResponse),
-		SkipInboundQueryMerge: true,
+		APIFormat:             string(format),
+		SkipInboundQueryMerge: format == llm.APIFormatOpenAIResponse,
 	}
 	outReq.Headers.Set("Content-Type", "application/json")
 	if stream {
@@ -117,9 +132,9 @@ func buildResponsesPassthroughRequest(ctx context.Context, inReq *httpclient.Req
 	return outReq, nil
 }
 
-// passthroughResponsesNonStream 执行 responses 非流式直通：
-// 原始响应字节写回客户端，sidecar 用 responses outbound 解析 usage/metrics。
-func passthroughResponsesNonStream(ctx context.Context, httpClient *httpclient.HttpClient, outAdapter transformer.Outbound, outReq *httpclient.Request, c *gin.Context) (int, *llm.Response, error) {
+// passthroughOpenAINonStream 执行 OpenAI 系非流式同格式直通：
+// 原始响应字节写回客户端，sidecar 用同格式 outbound 解析 usage/metrics。
+func passthroughOpenAINonStream(ctx context.Context, httpClient *httpclient.HttpClient, outAdapter transformer.Outbound, outReq *httpclient.Request, c *gin.Context) (int, *llm.Response, error) {
 	resp, err := httpClient.Do(ctx, outReq)
 	if err != nil {
 		return axonErrorStatusCode(err), nil, err
@@ -139,9 +154,9 @@ func passthroughResponsesNonStream(ctx context.Context, httpClient *httpclient.H
 	return resp.StatusCode, llmResp, nil
 }
 
-// passthroughResponsesStream 执行 responses 流式直通：
+// passthroughOpenAIStream 执行 OpenAI 系流式同格式直通：
 // 上游 SSE 事件按原始类型/data 直接写回客户端，结束前 sidecar 聚合 usage。
-func passthroughResponsesStream(ctx context.Context, httpClient *httpclient.HttpClient, inAdapter transformer.Inbound, outReq *httpclient.Request, c *gin.Context, firstTokenTimeout, heartbeatInterval time.Duration) (*llm.Usage, error) {
+func passthroughOpenAIStream(ctx context.Context, httpClient *httpclient.HttpClient, inAdapter transformer.Inbound, outReq *httpclient.Request, c *gin.Context, firstTokenTimeout, heartbeatInterval time.Duration) (*llm.Usage, error) {
 	stream, err := httpClient.DoStream(ctx, outReq)
 	if err != nil {
 		return nil, err

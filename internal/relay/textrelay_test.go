@@ -576,6 +576,62 @@ func TestTextHandlerOpenAIResponsesPassthroughStreamPreservesRawEvents(t *testin
 	}
 }
 
+func TestTextHandlerOpenAIChatPassthroughPreservesUnknownFields(t *testing.T) {
+	var capturedBody []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-raw","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeOpenAIChat, "gpt-4o", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"custom_extension":{"keep":"me"}}`)
+
+	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("decode upstream body: %v (body=%s)", err, capturedBody)
+	}
+	if _, ok := payload["custom_extension"]; !ok {
+		t.Fatalf("chat passthrough dropped unknown field: %s", capturedBody)
+	}
+}
+
+func TestTextHandlerOpenAIEmbeddingPassthroughPreservesUnknownFields(t *testing.T) {
+	var capturedBody []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","model":"text-embedding-3-small","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2,0.3]}],"usage":{"prompt_tokens":3,"total_tokens":3}}`))
+	}))
+	defer upstream.Close()
+
+	setupTextRelayTest(t, outbound.OutboundTypeOpenAIEmbedding, "text-embedding-3-small", upstream.URL)
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/embeddings",
+		`{"model":"text-embedding-3-small","input":"hello","custom_extension":{"keep":"me"}}`)
+
+	TextHandler(llm.APIFormatOpenAIEmbedding, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("decode upstream body: %v (body=%s)", err, capturedBody)
+	}
+	if _, ok := payload["custom_extension"]; !ok {
+		t.Fatalf("embedding passthrough dropped unknown field: %s", capturedBody)
+	}
+}
+
 func TestTextHandlerOpenAIEmbeddingRoundTrip(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

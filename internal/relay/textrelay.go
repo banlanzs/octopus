@@ -317,10 +317,10 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 					return
 				}
 
-				// 同格式直通（openai responses → openai responses）：保留 Codex 客户端
-				// 原始请求字节与协商头，避免上游将网关识别为非官方客户端。
-				if isOpenAIResponsesPassthrough(format, channelType) {
-					outReq, err := buildResponsesPassthroughRequest(ctx, httpReq, channel, usedKey, item.ModelName, isStream)
+				// 同格式直通（openai chat/responses/embedding）：保留客户端原始
+				// 请求字节与协议协商头，避免上游将网关识别为非官方客户端。
+				if isOpenAIRawPassthrough(format, channelType) {
+					outReq, err := buildOpenAIRawPassthroughRequest(ctx, httpReq, channel, usedKey, item.ModelName, isStream, format)
 					if err != nil {
 						lastAttemptErr = err
 						break
@@ -337,7 +337,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 					lastSpan = span
 
 					if isStream {
-						usage, perr := passthroughResponsesStream(ctx, httpClient, inAdapter, outReq, c, time.Duration(group.FirstTokenTimeOut)*time.Second, streamHeartbeatInterval())
+						usage, perr := passthroughOpenAIStream(ctx, httpClient, inAdapter, outReq, c, time.Duration(group.FirstTokenTimeOut)*time.Second, streamHeartbeatInterval())
 						if perr != nil {
 							sc := axonErrorStatusCode(perr)
 							if autoChannel {
@@ -375,7 +375,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 						return
 					}
 
-					sc, llmResp, perr := passthroughResponsesNonStream(ctx, httpClient, outAdapter, outReq, c)
+					sc, llmResp, perr := passthroughOpenAINonStream(ctx, httpClient, outAdapter, outReq, c)
 					if perr != nil {
 						if autoChannel && ShouldFallbackProtocol(sc, perr.Error(), false) {
 							span.End(dbmodel.AttemptFailed, sc, perr.Error())
