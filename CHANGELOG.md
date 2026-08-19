@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 渠道 API Key 批量导入
+
+- **后端**：新增 `POST /api/v1/channel/import-keys`，支持粘贴文本（换行/逗号/分号/Tab 分隔、JSON 数组）与结构化 `keys` 数组；自动 trim、去引号/`Bearer` 前缀、文内与渠道已有 Key 去重，单次最多 1000 个，返回导入/重复数量与最新渠道数据。
+- **前端**：渠道创建/编辑表单的 API Key 区域新增「批量导入」，粘贴后解析并合并到表单 Key 列表（自动填充空白行），重复 Key 提示跳过；最终随创建/保存统一提交。
+
 ### 文本路径协议保真：对齐 axonhub pipeline 的 header 合并与 Responses 同格式直通
 
 - **问题**：Codex 客户端经 `/v1/responses` 转发时，`Originator` / `Session-Id` / `X-Codex-*` 等协商头被丢弃，上游将网关识别为“套了网关”并返回 401（客户端看到 502）。

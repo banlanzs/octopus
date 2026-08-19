@@ -1017,6 +1017,16 @@
             "wsModeOff": "Off",
             "matchRegex": "Match Regex",
             "matchRegexPlaceholder": "Optional: regex pattern to match request model names",
+            "batchImport": "Bulk Import",
+            "batchImportPlaceholder": "Paste API keys, one per line. Supports comma/semicolon/Tab separation and JSON arrays like [\"sk-a\",\"sk-b\"].",
+            "batchImportHint": "Duplicate keys are skipped automatically. Imported keys are added to the form and saved together with the channel.",
+            "batchImportConfirm": "Import",
+            "batchImportImporting": "Importing...",
+            "batchImportCancel": "Cancel",
+            "batchImportEmpty": "No valid API keys found",
+            "batchImportSuccess": "Imported {count} API key(s)",
+            "batchImportDuplicates": "Skipped {count} duplicate API key(s)",
+            "batchImportFailed": "Import failed: {message}",
             "remark": "Remark"
         }
     },

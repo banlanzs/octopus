@@ -185,6 +185,24 @@ export type ChannelTestResult = {
 };
 
 /**
+ * 渠道 API Key 批量导入：Content 为粘贴文本（换行/逗号/分号/Tab 分隔，
+ * 也支持 JSON 字符串数组），Keys 为已拆好的结构化数组；两者可同时提供。
+ */
+export type ImportChannelKeysRequest = {
+    id: number;
+    content?: string;
+    keys?: string[];
+    enabled?: boolean;
+    remark?: string;
+};
+
+export type ImportChannelKeysResult = {
+    imported: number;
+    duplicated: number;
+    channel: ChannelServer;
+};
+
+/**
  * 获取渠道列表 Hook
  * 
  * @example
@@ -425,6 +443,29 @@ export function useLastSyncTime() {
         refetchInterval: 30000,
     });
 }
+
+/**
+ * 渠道 API Key 批量导入 Hook
+ */
+export function useImportChannelKeys() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (data: ImportChannelKeysRequest) => {
+            return apiClient.post<ImportChannelKeysResult>('/api/v1/channel/import-keys', data);
+        },
+        onSuccess: (data) => {
+            logger.log('渠道 API Key 批量导入完成:', data);
+            queryClient.invalidateQueries({ queryKey: ['channels', 'list'] });
+            queryClient.invalidateQueries({ queryKey: ['models', 'channel'] });
+            queryClient.invalidateQueries({ queryKey: ['groups', 'list'] });
+        },
+        onError: (error) => {
+            logger.error('渠道 API Key 批量导入失败:', error);
+        },
+    });
+}
+
 /**
  * 同步渠道 Hook
  * 

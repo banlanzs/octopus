@@ -1017,6 +1017,16 @@
             "wsModeOff": "关闭",
             "matchRegex": "匹配正则",
             "matchRegexPlaceholder": "可选：用于匹配请求模型名称的正则表达式",
+            "batchImport": "批量导入",
+            "batchImportPlaceholder": "粘贴 API Key，可每行一个，也可用逗号/分号/Tab 分隔，支持 JSON 数组如 [\"sk-a\",\"sk-b\"]",
+            "batchImportHint": "重复 Key 会自动跳过；导入结果会合并到下方列表，随渠道一起保存。",
+            "batchImportConfirm": "导入",
+            "batchImportImporting": "导入中...",
+            "batchImportCancel": "取消",
+            "batchImportEmpty": "未解析到有效 API Key",
+            "batchImportSuccess": "已导入 {count} 个 API Key",
+            "batchImportDuplicates": "已跳过 {count} 个重复 API Key",
+            "batchImportFailed": "导入失败：{message}",
             "remark": "备注"
         }
     },

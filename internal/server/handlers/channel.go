@@ -50,6 +50,10 @@ func init() {
 		AddRoute(
 			router.NewRoute("/test", http.MethodPost).
 				Handle(testChannel),
+		).
+		AddRoute(
+			router.NewRoute("/import-keys", http.MethodPost).
+				Handle(importChannelKeys),
 		)
 	router.NewGroupRouter("/api/v1/channel").
 		Use(middleware.Auth()).
@@ -239,6 +243,34 @@ func testChannel(c *gin.Context) {
 		channel.ProxyConfigID = nil
 	}
 	result := channeltest.Run(c.Request.Context(), &channel)
+	resp.Success(c, result)
+}
+
+// importChannelKeys 向已存在的渠道批量导入 API Key。
+// 支持粘贴文本（换行/逗号/分号/Tab 分隔或 JSON 数组）和结构化 keys 数组。
+func importChannelKeys(c *gin.Context) {
+	var req model.ChannelKeyImportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.InvalidJSON(c)
+		return
+	}
+	if req.ID <= 0 {
+		resp.Error(c, http.StatusBadRequest, "channel id is required")
+		return
+	}
+	if strings.TrimSpace(req.Content) == "" && len(req.Keys) == 0 {
+		resp.Error(c, http.StatusBadRequest, "content or keys is required")
+		return
+	}
+	result, err := op.ChannelImportKeys(&req, c.Request.Context())
+	if err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
+		return
+	}
+	if result.Channel != nil {
+		stats := op.StatsChannelGet(result.Channel.ID)
+		result.Channel.Stats = &stats
+	}
 	resp.Success(c, result)
 }
 

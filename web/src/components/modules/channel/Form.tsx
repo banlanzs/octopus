@@ -14,7 +14,8 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/common/Toast';
 import { useTranslations } from 'next-intl';
 import { useEffect, useRef, useState } from 'react';
-import { RefreshCw, X, Plus, FlaskConical, Loader2 } from 'lucide-react';
+import { RefreshCw, X, Plus, FlaskConical, Loader2, Import } from 'lucide-react';
+import { parseChannelKeyImportContent } from './key-import';
 
 export interface ChannelKeyFormItem {
     id?: number;
@@ -118,6 +119,8 @@ export function ChannelForm({
     const fetchModel = useFetchModel();
     const testChannel = useTestChannel();
     const [testResult, setTestResult] = useState<ChannelTestResult | null>(null);
+    const [keyImportOpen, setKeyImportOpen] = useState(false);
+    const [keyImportText, setKeyImportText] = useState('');
 
     const effectiveKey =
         formData.keys.find((k) => k.enabled && k.channel_key.trim())?.channel_key.trim() || '';
@@ -236,6 +239,58 @@ export function ChannelForm({
             ...formData,
             keys: [...formData.keys, { enabled: true, channel_key: '' }],
         });
+    };
+
+    const appendImportedKeys = (imported: string[]) => {
+        const current = formData.keys ?? [];
+        const existing = new Set(current.map((k) => k.channel_key.trim()).filter(Boolean));
+        const fresh = imported.filter((key) => !existing.has(key));
+        const result = { added: fresh.length, duplicated: imported.length - fresh.length };
+        if (fresh.length === 0) return result;
+
+        let fillIndex = 0;
+        const next = current.map((k) => {
+            if (k.channel_key.trim() !== '' || fillIndex >= fresh.length) return k;
+            return { ...k, channel_key: fresh[fillIndex++], enabled: true };
+        });
+        const remaining = fresh.slice(fillIndex).map((channel_key) => ({
+            enabled: true,
+            channel_key,
+            remark: '',
+        }));
+
+        onFormDataChange({ ...formData, keys: [...next, ...remaining] });
+        return result;
+    };
+
+    const closeKeyImport = () => {
+        setKeyImportOpen(false);
+        setKeyImportText('');
+    };
+
+    const handleKeyImport = () => {
+        const content = keyImportText.trim();
+        if (!content) {
+            toast.warning(t('batchImportEmpty'));
+            return;
+        }
+
+        // 导入结果先合并到草稿 Key 列表；新建渠道在创建时保存，
+        // 已保存渠道由表单统一的 Save 动作随 keys_to_add 一起提交。
+        const parsed = parseChannelKeyImportContent(content);
+        if (parsed.keys.length === 0) {
+            toast.warning(t('batchImportEmpty'));
+            return;
+        }
+        const { added, duplicated: existingDuplicates } = appendImportedKeys(parsed.keys);
+        if (added > 0) {
+            toast.success(t('batchImportSuccess', { count: added }));
+            closeKeyImport();
+        }
+        const totalDuplicates = parsed.duplicated + existingDuplicates;
+        if (totalDuplicates > 0) {
+            toast.info(t('batchImportDuplicates', { count: totalDuplicates }));
+        }
     };
 
     const handleUpdateKey = (idx: number, patch: Partial<ChannelKeyFormItem>) => {
@@ -378,17 +433,66 @@ export function ChannelForm({
                     <label className="text-sm font-medium text-card-foreground">
                         {t('apiKey')} {formData.keys.length > 0 ? `(${formData.keys.length})` : ''}
                     </label>
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleAddKey}
-                        className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
-                    >
-                        <Plus className="h-3 w-3 mr-1" />
-                        {t('add')}
-                    </Button>
+                    <div className="flex items-center gap-1">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setKeyImportOpen((open) => !open)}
+                            className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
+                        >
+                            <Import className="h-3 w-3 mr-1" />
+                            {t('batchImport')}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleAddKey}
+                            className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
+                        >
+                            <Plus className="h-3 w-3 mr-1" />
+                            {t('add')}
+                        </Button>
+                    </div>
                 </div>
+                {keyImportOpen ? (
+                    <div className="rounded-xl border border-border bg-muted/30 p-3 space-y-2">
+                        <textarea
+                            value={keyImportText}
+                            onChange={(e) => setKeyImportText(e.target.value)}
+                            placeholder={t('batchImportPlaceholder')}
+                            rows={6}
+                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                        />
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-xs text-muted-foreground/80 leading-relaxed">
+                                {t('batchImportHint')}
+                            </p>
+                            <div className="flex items-center gap-2">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={closeKeyImport}
+                                    className="rounded-xl"
+                                >
+                                    {t('batchImportCancel')}
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={handleKeyImport}
+                                    disabled={!keyImportText.trim()}
+                                    className="rounded-xl"
+                                >
+                                    <Import className="h-3 w-3 mr-1" />
+                                    {t('batchImportConfirm')}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
                 <div className="space-y-2">
                     {(formData.keys ?? []).map((k, idx) => (
                         <div key={k.id ?? `new-${idx}`} className="flex items-center gap-2">

@@ -1017,6 +1017,16 @@
             "wsModeOff": "關閉",
             "matchRegex": "匹配正規",
             "matchRegexPlaceholder": "可選：用於匹配請求模型名稱的正規表示式",
+            "batchImport": "批次匯入",
+            "batchImportPlaceholder": "貼上 API Key，可每行一個，也可用逗號/分號/Tab 分隔，支援 JSON 陣列如 [\"sk-a\",\"sk-b\"]",
+            "batchImportHint": "重複 Key 會自動略過；匯入結果會合併到下方清單，隨供應源一起儲存。",
+            "batchImportConfirm": "匯入",
+            "batchImportImporting": "匯入中...",
+            "batchImportCancel": "取消",
+            "batchImportEmpty": "未解析到有效 API Key",
+            "batchImportSuccess": "已匯入 {count} 個 API Key",
+            "batchImportDuplicates": "已略過 {count} 個重複 API Key",
+            "batchImportFailed": "匯入失敗：{message}",
             "remark": "備註"
         }
     },
