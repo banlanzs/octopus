@@ -242,7 +242,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 
 					// 流式直通：SSE 字节透传 + sidecar 聚合 usage。
 					if isStream {
-						usage, perr := passthroughAnthropicStream(ctx, channel, usedKey, httpReq.Body, actualModel, c, inAdapter)
+						usage, perr := passthroughAnthropicStream(ctx, channel, usedKey, httpReq.Body, actualModel, c, inAdapter, span)
 						if perr != nil {
 							sc := axonErrorStatusCode(perr)
 							if autoChannel {
@@ -281,7 +281,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 						return
 					}
 
-					sc, llmResp, perr := passthroughAnthropicNonStream(ctx, channel, usedKey, httpReq.Body, actualModel, c, outAdapter)
+					sc, llmResp, perr := passthroughAnthropicNonStream(ctx, channel, usedKey, httpReq.Body, actualModel, c, outAdapter, span)
 					if perr != nil {
 						if autoChannel && ShouldFallbackProtocol(sc, perr.Error(), false) {
 							span.End(dbmodel.AttemptFailed, sc, perr.Error())
@@ -340,6 +340,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 					if isStream {
 						usage, perr := passthroughOpenAIStream(ctx, httpClient, inAdapter, outReq, c, time.Duration(group.FirstTokenTimeOut)*time.Second, streamHeartbeatInterval())
 						if perr != nil {
+							recordAxonAttemptFailureDetail(span, outReq, perr)
 							sc := axonErrorStatusCode(perr)
 							if autoChannel {
 								if extracted := extractUpstreamStatusCode(perr); extracted != 0 {
@@ -378,6 +379,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 
 					sc, llmResp, perr := passthroughOpenAINonStream(ctx, httpClient, outAdapter, outReq, c)
 					if perr != nil {
+						recordAxonAttemptFailureDetail(span, outReq, perr)
 						if autoChannel && ShouldFallbackProtocol(sc, perr.Error(), false) {
 							span.End(dbmodel.AttemptFailed, sc, perr.Error())
 							lastStatusCode = sc
@@ -420,7 +422,11 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				// 每次尝试都把统一请求的模型名改为本次候选的上游模型。
 				llmReq.Model = actualModel
 
-				outReq, err := outAdapter.TransformRequest(ctx, llmReq)
+				// 剥离仅对 OpenAI 系出站非法的「思考已禁用」哨兵（详见函数注释）。
+				// 返回副本，保证换协议重试时 llmReq 上的哨兵仍在。
+				reqForOutbound := axonadapter.SanitizeReasoningEffortForOutbound(llmReq, channelType)
+
+				outReq, err := outAdapter.TransformRequest(ctx, reqForOutbound)
 				if err != nil {
 					if autoChannel {
 						// 请求无法用该协议表示：auto 模式视为该候选能力缺失。
@@ -458,6 +464,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				if llmReq.Stream != nil && *llmReq.Stream {
 					usage, ferr := forwardAxonStream(ctx, httpClient, outAdapter, inAdapter, outReq, c, time.Duration(group.FirstTokenTimeOut)*time.Second, streamHeartbeatInterval())
 					if ferr != nil {
+						recordAxonAttemptFailureDetail(span, outReq, ferr)
 						sc := axonErrorStatusCode(ferr)
 						if autoChannel {
 							// 带状态码的错误来自 DoStream/TransformStream（写响应前）；
@@ -498,6 +505,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 
 				httpResp, err := httpClient.Do(ctx, outReq)
 				if err != nil {
+					recordAxonAttemptFailureDetail(span, outReq, err)
 					sc := axonErrorStatusCode(err)
 					if autoChannel {
 						if extracted := extractUpstreamStatusCode(err); extracted != 0 {
@@ -524,6 +532,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				// 上游响应 → 统一 llm.Response → 客户端格式。
 				llmResp, err := outAdapter.TransformResponse(ctx, httpResp)
 				if err != nil {
+					recordAxonAttemptFailureDetail(span, outReq, err)
 					sc := axonErrorStatusCode(err)
 					if autoChannel {
 						if extracted := extractUpstreamStatusCode(err); extracted != 0 {
@@ -548,6 +557,7 @@ func TextHandler(format llm.APIFormat, c *gin.Context) {
 				}
 				outResp, err := inAdapter.TransformResponse(ctx, llmResp)
 				if err != nil {
+					recordAxonAttemptFailureDetail(span, outReq, err)
 					span.End(dbmodel.AttemptFailed, 0, err.Error())
 					recordAxonAttemptFailure(channel, usedKey, span, 0)
 					lastAttemptErr = err

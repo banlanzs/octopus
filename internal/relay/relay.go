@@ -1259,43 +1259,20 @@ func failedDetailEnabled() bool {
 }
 
 // recordAttemptRequestBody 把出站请求体（转换后形态）写入当前尝试 span，
-// 供失败日志展示。受开关与截断控制。
+// 供失败日志展示。开关/截断口径见 attempt_detail.go。
 func (ra *relayAttempt) recordAttemptRequestBody(body []byte) {
-	if ra.attemptSpan == nil || len(body) == 0 || !failedDetailEnabled() {
-		return
-	}
-	if len(body) > maxFailedDetailBytes {
-		body = body[:maxFailedDetailBytes]
-	}
-	ra.attemptSpan.SetRequestBody(body)
+	recordSpanRequestBody(ra.attemptSpan, body)
 }
 
 // recordAttemptResponseBody 把失败响应体写入当前尝试 span，供失败日志展示。
-// 受开关与截断控制。
 func (ra *relayAttempt) recordAttemptResponseBody(body []byte) {
-	if ra.attemptSpan == nil || len(body) == 0 || !failedDetailEnabled() {
-		return
-	}
-	if len(body) > maxFailedDetailBytes {
-		body = body[:maxFailedDetailBytes]
-	}
-	ra.attemptSpan.SetResponseBody(body)
+	recordSpanResponseBody(ra.attemptSpan, body)
 }
 
 // recordAttemptOutboundHeaders 把出站请求头（脱敏 JSON）写入当前尝试 span，
-// 供失败日志展示与调用日志导出。受开关与截断控制。
+// 供失败日志展示与调用日志导出。
 func (ra *relayAttempt) recordAttemptOutboundHeaders(h http.Header) {
-	if ra.attemptSpan == nil || len(h) == 0 || !failedDetailEnabled() {
-		return
-	}
-	encoded := serializeRequestHeadersForLog(h)
-	if len(encoded) == 0 {
-		return
-	}
-	if len(encoded) > maxFailedDetailBytes {
-		encoded = encoded[:maxFailedDetailBytes]
-	}
-	ra.attemptSpan.SetOutboundHeaders([]byte(encoded))
+	recordSpanOutboundHeaders(ra.attemptSpan, h)
 }
 
 // applyParamOverride merges channel-level JSON request overrides and records the final upstream payload.

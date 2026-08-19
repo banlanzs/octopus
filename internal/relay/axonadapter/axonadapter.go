@@ -30,6 +30,60 @@ import (
 // openai/chat_completions 格式），此处自定义常量用于 NewOutbound 路由。
 const ChannelTypeDoubao llm.APIFormat = "doubao"
 
+// reasoningEffortDisabledSentinel 是 axonhub 的 anthropic inbound 在
+// thinking.type == "disabled" 时写入 llm.Request.ReasoningEffort 的内部哨兵
+// （axonhub llm/transformer/anthropic/inbound_convert.go）。它只表达「思考已
+// 显式禁用」，不是任何上游 API 的合法取值。
+const reasoningEffortDisabledSentinel = "none"
+
+// SanitizeReasoningEffortForOutbound 按目标协议决定是否剥离 ReasoningEffort
+// 的内部哨兵 "none"，返回可直接交给 outbound transformer 的请求。
+//
+// 各 outbound 对该哨兵的处理并不一致：
+//   - anthropic：用它还原 thinking:{"type":"disabled"}——必须保留；
+//   - gemini：用它填 thinking_level:"none"（Gemini 3.x 合法枚举）——必须保留；
+//   - deepseek：自行清空后再发出——不受影响；
+//   - openai chat / responses：原样写入 reasoning_effort 字段——会外发。
+//
+// 最后一种是缺陷来源：OpenAI 及多数兼容上游的枚举为
+// low/medium/high/xhigh/max，收到 "none" 直接 400
+// （"'reasoning_effort' must be one of: ..."）。更糟的是该 400 会被
+// ShouldFallbackProtocol 当成协议能力缺失，于是同一个错误在每个候选协议上
+// 重放一遍。因此仅对 OpenAI 系出站剥离。
+//
+// 剥离后「禁用思考」的意图仍由 TransformerMetadata 的 thinking 类型承载
+// （DeepSeek 特化路径据此工作）；OpenAI 协议本身没有「禁用推理」的标准表达，
+// 省略该字段即为正确行为。
+//
+// 入参始终不被修改：命中时返回浅拷贝，未命中时原样返回入参指针，
+// 保证同一请求换协议重试时哨兵仍在。
+func SanitizeReasoningEffortForOutbound(req *llm.Request, channelType llm.APIFormat) *llm.Request {
+	if req == nil || req.ReasoningEffort != reasoningEffortDisabledSentinel {
+		return req
+	}
+	if !leaksReasoningEffortSentinel(channelType) {
+		return req
+	}
+	reqCopy := *req
+	reqCopy.ReasoningEffort = ""
+	return &reqCopy
+}
+
+// leaksReasoningEffortSentinel 标识哪些出站协议会把 ReasoningEffort 原样写入
+// 上游请求体（即不消费 "none" 哨兵）。新增渠道类型时需同步评估其 outbound
+// 是否消费该值，未评估的类型默认按「消费」处理，不做剥离。
+func leaksReasoningEffortSentinel(channelType llm.APIFormat) bool {
+	switch channelType {
+	case llm.APIFormatOpenAIChatCompletion,
+		llm.APIFormatOpenAIResponse,
+		llm.APIFormatOpenAIEmbedding,
+		ChannelTypeDoubao:
+		return true
+	default:
+		return false
+	}
+}
+
 // OutboundTypeToAPIFormat 将本地数字渠道类型映射为 axonhub 渠道类型标识。
 // 返回的 ok 为 false 表示该渠道类型不在文本路径支持范围内。
 func OutboundTypeToAPIFormat(t outbound.OutboundType) (llm.APIFormat, bool) {

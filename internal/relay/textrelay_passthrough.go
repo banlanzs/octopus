@@ -13,6 +13,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/helper"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -165,10 +166,11 @@ func passthroughOpenAIStream(ctx context.Context, httpClient *httpclient.HttpCli
 }
 
 // buildPassthroughRequest 构造 anthropic 直通出站请求：字节改写 model + 参数覆盖 + 出站头。
-func buildPassthroughRequest(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context) (*http.Request, error) {
+// 同时返回最终出站字节，供失败详情落盘（req.Body 是一次性 reader，事后不便再取）。
+func buildPassthroughRequest(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context) (*http.Request, []byte, error) {
 	body, err := rewriteRawRequestModel(rawBody, modelName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// 渠道参数覆盖（对齐本地 forwardViaHTTPPassthrough；显式配置覆盖时接受字节重排）。
 	if channel.ParamOverride != nil && strings.TrimSpace(*channel.ParamOverride) != "" {
@@ -187,7 +189,7 @@ func buildPassthroughRequest(ctx context.Context, channel *dbmodel.Channel, used
 	baseURL := strings.TrimSuffix(channel.GetBaseUrl(), "/") + "/messages"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.ContentLength = int64(len(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -196,13 +198,24 @@ func buildPassthroughRequest(ctx context.Context, channel *dbmodel.Channel, used
 	req.Header.Set("anthropic-beta", defaultAnthropicPassthroughBeta)
 	req.Header.Set("X-API-Key", usedKey.ChannelKey)
 	copyPassthroughHeaders(c, req, channel)
-	return req, nil
+	return req, body, nil
+}
+
+// recordAnthropicPassthroughFailure 记录 anthropic 直通失败详情：出站体为改写
+// model 后的客户端原始字节，出站头为直通构造的 header（脱敏由记录层负责）。
+// 只在失败分支调用，与标准路径口径一致。
+func recordAnthropicPassthroughFailure(span *balancer.AttemptSpan, req *http.Request, outBody, respBody []byte) {
+	recordSpanRequestBody(span, outBody)
+	if req != nil {
+		recordSpanOutboundHeaders(span, req.Header)
+	}
+	recordSpanResponseBody(span, respBody)
 }
 
 // passthroughAnthropicNonStream 执行 anthropic 非流式直通：
 // 字节稳定改写 model → 直发上游 → 响应体直通写回 → sidecar 解析 usage。
-func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context, outAdapter transformer.Outbound) (int, *llm.Response, error) {
-	req, err := buildPassthroughRequest(ctx, channel, usedKey, rawBody, modelName, c)
+func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context, outAdapter transformer.Outbound, span *balancer.AttemptSpan) (int, *llm.Response, error) {
+	req, outBody, err := buildPassthroughRequest(ctx, channel, usedKey, rawBody, modelName, c)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -219,6 +232,7 @@ func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		recordAnthropicPassthroughFailure(span, req, outBody, errBody)
 		return resp.StatusCode, nil, fmt.Errorf("upstream error: %d: %s", resp.StatusCode, truncateBodyForMessage(errBody))
 	}
 
@@ -243,8 +257,8 @@ func passthroughAnthropicNonStream(ctx context.Context, channel *dbmodel.Channel
 
 // passthroughAnthropicStream 执行 anthropic 流式直通：
 // 字节改写 model → 流式发送 → SSE 字节透传写回 → sidecar 聚合 usage。
-func passthroughAnthropicStream(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context, inAdapter transformer.Inbound) (*llm.Usage, error) {
-	req, err := buildPassthroughRequest(ctx, channel, usedKey, rawBody, modelName, c)
+func passthroughAnthropicStream(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, rawBody []byte, modelName string, c *gin.Context, inAdapter transformer.Inbound, span *balancer.AttemptSpan) (*llm.Usage, error) {
+	req, outBody, err := buildPassthroughRequest(ctx, channel, usedKey, rawBody, modelName, c)
 	if err != nil {
 		return nil, err
 	}
@@ -261,10 +275,12 @@ func passthroughAnthropicStream(ctx context.Context, channel *dbmodel.Channel, u
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		recordAnthropicPassthroughFailure(span, req, outBody, errBody)
 		return nil, fmt.Errorf("upstream error: %d: %s", resp.StatusCode, truncateBodyForMessage(errBody))
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.Contains(strings.ToLower(ct), "text/event-stream") {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+		recordAnthropicPassthroughFailure(span, req, outBody, body)
 		return nil, fmt.Errorf("upstream returned non-SSE content-type %q: %s", ct, string(body))
 	}
 
