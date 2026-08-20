@@ -1,17 +1,72 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
 	"github.com/looplj/axonhub/llm"
 )
+
+// TestTruncateFailedDetailKeepsTail 超长请求体必须保留尾部。
+// Anthropic/OpenAI 请求的顶层参数（thinking、temperature、metadata、
+// reasoning_effort）排在体积占比 99% 的 messages 之后，只保留头部等于把全部
+// 诊断价值丢掉——KAPI 那次 400 就是因此无法判定 reasoning_effort 是否由网关发出。
+func TestTruncateFailedDetailKeepsTail(t *testing.T) {
+	head := `{"model":"m","max_tokens":64,"messages":[`
+	filler := strings.Repeat(`{"role":"user","content":"x"},`, 20000)
+	tail := `],"thinking":{"type":"disabled"},"metadata":{"user_id":"u"}}`
+	body := []byte(head + filler + tail)
+	if len(body) <= maxFailedDetailBytes {
+		t.Fatalf("fixture too small (%d bytes), cannot exercise truncation", len(body))
+	}
+
+	got := truncateFailedDetail(body)
+	if len(got) > maxFailedDetailBytes {
+		t.Fatalf("truncated length %d exceeds cap %d", len(got), maxFailedDetailBytes)
+	}
+	if !bytes.HasPrefix(got, []byte(`{"model":"m","max_tokens":64`)) {
+		t.Fatalf("head must be preserved, got prefix: %q", got[:min(60, len(got))])
+	}
+	if !bytes.HasSuffix(got, []byte(tail)) {
+		t.Fatalf("tail must be preserved, got suffix: %q", got[max(0, len(got)-80):])
+	}
+	if !bytes.Contains(got, []byte("omitted")) {
+		t.Fatal("truncation must be explicitly marked, otherwise the export reads as a complete body")
+	}
+}
+
+// TestTruncateFailedDetailUTF8Boundary 截断点必须落在 UTF-8 字符边界上，
+// 否则中文内容会在失败详情里变成乱码。
+func TestTruncateFailedDetailUTF8Boundary(t *testing.T) {
+	body := []byte(strings.Repeat("中文内容测试", 40000))
+	if len(body) <= maxFailedDetailBytes {
+		t.Fatalf("fixture too small (%d bytes)", len(body))
+	}
+	got := truncateFailedDetail(body)
+	if len(got) > maxFailedDetailBytes {
+		t.Fatalf("truncated length %d exceeds cap %d", len(got), maxFailedDetailBytes)
+	}
+	if !utf8.Valid(got) {
+		t.Fatal("truncated body must remain valid UTF-8")
+	}
+}
+
+// TestTruncateFailedDetailPassthrough 未超限时原样返回，不加任何标记。
+func TestTruncateFailedDetailPassthrough(t *testing.T) {
+	body := []byte(`{"model":"m","thinking":{"type":"disabled"}}`)
+	got := truncateFailedDetail(body)
+	if !bytes.Equal(got, body) {
+		t.Fatalf("short body must pass through unchanged, got: %q", got)
+	}
+}
 
 // findFailedAttempt 从审计日志里取出指定渠道的失败尝试记录。
 func findFailedAttempt(t *testing.T, ctx context.Context, channelName string) dbmodel.ChannelAttempt {
