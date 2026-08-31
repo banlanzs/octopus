@@ -54,6 +54,10 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	}
 	channel.Tags = model.NormalizeChannelTags(channel.Tags)
 	channel.ModelRedirects = model.NormalizeModelRedirects(channel.ModelRedirects)
+	channel.ChannelGroups = model.NormalizeChannelGroups(channel.ChannelGroups)
+	if err := model.ValidateChannelGroupModes(channel.ChannelGroups); err != nil {
+		return err
+	}
 	if err := channel.ProxyMode.Validate(false); err != nil {
 		return err
 	}
@@ -221,6 +225,14 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	if req.ModelRedirectOnly != nil {
 		selectFields = append(selectFields, "model_redirect_only")
 		updates.ModelRedirectOnly = *req.ModelRedirectOnly
+	}
+	if req.ChannelGroups != nil {
+		selectFields = append(selectFields, "channel_groups")
+		updates.ChannelGroups = model.NormalizeChannelGroups(*req.ChannelGroups)
+		if err := model.ValidateChannelGroupModes(updates.ChannelGroups); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
 	}
 	effectiveProxyMode := existingChannel.ProxyMode
 	effectiveProxyConfigID := existingChannel.ProxyConfigID

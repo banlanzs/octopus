@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,22 @@ type ModelRedirect struct {
 	TargetModel string `json:"target_model"`
 }
 
+// ChannelGroup 渠道级分组：出口别名 → 该渠道内多模型的调度列表。
+// 客户端请求 Alias 时，在 Items 内按 Mode 调度（语义等同全局分组，
+// 但范围限定在单个渠道内，仅对限定该渠道的 API Key 生效）。
+type ChannelGroup struct {
+	Alias string             `json:"alias"` // 出口别名（对客户端暴露）
+	Mode  GroupMode          `json:"mode"`  // 仅支持 GroupModeFailover / GroupModeWeighted
+	Items []ChannelGroupItem `json:"items"`
+}
+
+// ChannelGroupItem 渠道级分组内的模型条目。
+type ChannelGroupItem struct {
+	Model    string `json:"model"`    // 渠道内实际模型名
+	Priority int    `json:"priority"` // Failover 用，小值优先
+	Weight   int    `json:"weight"`   // Weighted 用，<=0 视为 1
+}
+
 type ChannelWSMode string
 
 const (
@@ -82,7 +99,9 @@ type Channel struct {
 	ModelRedirects []ModelRedirect `json:"model_redirects" gorm:"serializer:json"`
 	// ModelRedirectOnly 仅暴露重定向别名模型：开启后渠道配置的原始
 	// Model/CustomModel 不再出现在 /v1/models 与渠道模型列表中。
-	ModelRedirectOnly bool           `json:"model_redirect_only" gorm:"default:false"`
+	ModelRedirectOnly bool `json:"model_redirect_only" gorm:"default:false"`
+	// ChannelGroups 渠道级分组列表：出口别名 → 渠道内多模型调度。
+	ChannelGroups []ChannelGroup `json:"channel_groups" gorm:"serializer:json"`
 	ProxyMode         ProxyUsageMode `json:"proxy_mode" gorm:"type:varchar(16);not null;default:'direct'"`
 	ProxyConfigID     *int           `json:"proxy_config_id"`
 	Proxy             bool           `json:"-" gorm:"default:false"`
@@ -180,7 +199,9 @@ type ChannelUpdateRequest struct {
 	// ModelRedirects 为空数组表示清除重定向（nil 表示不修改）。
 	ModelRedirects *[]ModelRedirect `json:"model_redirects,omitempty"`
 	// ModelRedirectOnly 仅暴露重定向别名模型。
-	ModelRedirectOnly *bool           `json:"model_redirect_only,omitempty"`
+	ModelRedirectOnly *bool `json:"model_redirect_only,omitempty"`
+	// ChannelGroups 为空数组表示清除渠道级分组（nil 表示不修改）。
+	ChannelGroups *[]ChannelGroup `json:"channel_groups,omitempty"`
 	ProxyMode         *ProxyUsageMode `json:"proxy_mode,omitempty"`
 	ProxyConfigID     *int            `json:"proxy_config_id,omitempty"`
 	Proxy             *bool           `json:"-"`
@@ -270,6 +291,78 @@ func NormalizeModelRedirects(redirects []ModelRedirect) []ModelRedirect {
 	return normalized
 }
 
+// NormalizeChannelGroups 标准化渠道级分组列表：trim、去空别名、按别名去重、
+// 条目去空模型、条目按模型去重。空列表返回 nil。
+func NormalizeChannelGroups(groups []ChannelGroup) []ChannelGroup {
+	if len(groups) == 0 {
+		return nil
+	}
+	seenAlias := make(map[string]struct{}, len(groups))
+	normalized := make([]ChannelGroup, 0, len(groups))
+	for _, group := range groups {
+		alias := strings.TrimSpace(group.Alias)
+		if alias == "" {
+			continue
+		}
+		if _, ok := seenAlias[alias]; ok {
+			continue
+		}
+		seenAlias[alias] = struct{}{}
+		group.Alias = alias
+
+		if len(group.Items) == 0 {
+			normalized = append(normalized, group)
+			continue
+		}
+		seenModel := make(map[string]struct{}, len(group.Items))
+		items := make([]ChannelGroupItem, 0, len(group.Items))
+		for _, item := range group.Items {
+			modelName := strings.TrimSpace(item.Model)
+			if modelName == "" {
+				continue
+			}
+			if _, ok := seenModel[modelName]; ok {
+				continue
+			}
+			seenModel[modelName] = struct{}{}
+			item.Model = modelName
+			items = append(items, item)
+		}
+		group.Items = items
+		normalized = append(normalized, group)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+// ValidateChannelGroupModes 校验渠道级分组模式：仅支持故障转移与加权。
+func ValidateChannelGroupModes(groups []ChannelGroup) error {
+	for _, group := range groups {
+		switch group.Mode {
+		case GroupModeFailover, GroupModeWeighted:
+		default:
+			return fmt.Errorf("channel group %q: unsupported mode %d (only failover and weighted are supported)", group.Alias, group.Mode)
+		}
+	}
+	return nil
+}
+
+// ChannelGroupForAlias 返回命中别名的渠道级分组。
+func (c *Channel) ChannelGroupForAlias(alias string) (ChannelGroup, bool) {
+	if c == nil {
+		return ChannelGroup{}, false
+	}
+	name := strings.TrimSpace(alias)
+	for _, group := range NormalizeChannelGroups(c.ChannelGroups) {
+		if group.Alias == name {
+			return group, true
+		}
+	}
+	return ChannelGroup{}, false
+}
+
 // ModelRedirectMap 返回 别名 -> 上游实际模型 的映射。
 func (c *Channel) ModelRedirectMap() map[string]string {
 	redirects := NormalizeModelRedirects(c.ModelRedirects)
@@ -301,8 +394,8 @@ func (c *Channel) ResolveModelRedirect(modelName string) string {
 }
 
 // ExposedModelNames 返回该渠道对客户端暴露的模型名列表：
-// 未开启"仅别名"时 = Model/CustomModel + 重定向别名；
-// 开启后仅返回重定向别名（原始模型不暴露）。
+// 未开启"仅别名"时 = Model/CustomModel + 重定向别名 + 分组别名；
+// 开启后仅返回重定向别名与分组别名（原始模型不暴露）。
 func (c *Channel) ExposedModelNames() []string {
 	if c == nil {
 		return nil
@@ -328,6 +421,9 @@ func (c *Channel) ExposedModelNames() []string {
 	}
 	for _, redirect := range NormalizeModelRedirects(c.ModelRedirects) {
 		appendName(redirect.Model)
+	}
+	for _, group := range NormalizeChannelGroups(c.ChannelGroups) {
+		appendName(group.Alias)
 	}
 	return names
 }
