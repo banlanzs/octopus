@@ -1,4 +1,5 @@
-import { ChannelType, type AutoGroupType, type Channel, type ChannelTestResult, type ChannelWSMode, type ModelRedirect, useFetchModel, useTestChannel } from '@/api/endpoints/channel';
+import { ChannelType, type AutoGroupType, type Channel, type ChannelGroup, type ChannelGroupItem, type ChannelTestResult, type ChannelWSMode, type ModelRedirect, useFetchModel, useTestChannel } from '@/api/endpoints/channel';
+import { GroupMode } from '@/api/endpoints/group';
 import { ProxySelector } from '@/components/modules/proxy-pool/ProxySelector';
 import { TagInput } from '@/components/modules/site/TagInput';
 import {
@@ -43,6 +44,7 @@ export interface ChannelFormData {
     tags: string[];
     model_redirects: ModelRedirect[];
     model_redirect_only: boolean;
+    channel_groups: ChannelGroup[];
     enabled: boolean;
     auto_sync: boolean;
     force_deep_seek_thinking: boolean;
@@ -246,6 +248,51 @@ export function ChannelForm({
     const handleRemoveRedirect = (idx: number) => {
         const next = (formData.model_redirects ?? []).filter((_, i) => i !== idx);
         onFormDataChange({ ...formData, model_redirects: next });
+    };
+
+    const handleAddChannelGroup = () => {
+        onFormDataChange({
+            ...formData,
+            channel_groups: [
+                ...(formData.channel_groups ?? []),
+                { alias: '', mode: GroupMode.Weighted, items: [{ model: '', priority: 0, weight: 1 }] },
+            ],
+        });
+    };
+
+    const handleUpdateChannelGroup = (idx: number, patch: Partial<ChannelGroup>) => {
+        const next = (formData.channel_groups ?? []).map((g, i) => (i === idx ? { ...g, ...patch } : g));
+        onFormDataChange({ ...formData, channel_groups: next });
+    };
+
+    const handleRemoveChannelGroup = (idx: number) => {
+        const next = (formData.channel_groups ?? []).filter((_, i) => i !== idx);
+        onFormDataChange({ ...formData, channel_groups: next });
+    };
+
+    const handleAddChannelGroupItem = (groupIdx: number) => {
+        const next = (formData.channel_groups ?? []).map((g, i) =>
+            i === groupIdx ? { ...g, items: [...(g.items ?? []), { model: '', priority: 0, weight: 1 }] } : g
+        );
+        onFormDataChange({ ...formData, channel_groups: next });
+    };
+
+    const handleUpdateChannelGroupItem = (groupIdx: number, itemIdx: number, patch: Partial<ChannelGroupItem>) => {
+        const next = (formData.channel_groups ?? []).map((g, i) => {
+            if (i !== groupIdx) return g;
+            return {
+                ...g,
+                items: (g.items ?? []).map((it, j) => (j === itemIdx ? { ...it, ...patch } : it)),
+            };
+        });
+        onFormDataChange({ ...formData, channel_groups: next });
+    };
+
+    const handleRemoveChannelGroupItem = (groupIdx: number, itemIdx: number) => {
+        const next = (formData.channel_groups ?? []).map((g, i) =>
+            i === groupIdx ? { ...g, items: (g.items ?? []).filter((_, j) => j !== itemIdx) } : g
+        );
+        onFormDataChange({ ...formData, channel_groups: next });
     };
 
     const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -722,6 +769,119 @@ export function ChannelForm({
                     <span className="text-sm text-card-foreground">{t('modelRedirectOnly')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground/80 leading-relaxed">{t('modelRedirectOnlyHint')}</p>
+            </div>
+
+            <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                    <label className="text-sm font-medium text-card-foreground">{t('channelGroups')}</label>
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleAddChannelGroup}
+                        className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
+                    >
+                        <Plus className="h-3 w-3 mr-1" />
+                        {t('channelGroupAdd')}
+                    </Button>
+                </div>
+                <p className="text-xs text-muted-foreground/80 leading-relaxed">{t('channelGroupHint')}</p>
+                {(formData.channel_groups ?? []).map((group, groupIdx) => (
+                    <div key={`channel-group-${groupIdx}`} className="space-y-2 rounded-xl border border-border/60 bg-muted/30 p-2.5">
+                        <div className="flex items-center gap-2">
+                            <Input
+                                type="text"
+                                value={group.alias}
+                                onChange={(e) => handleUpdateChannelGroup(groupIdx, { alias: e.target.value })}
+                                placeholder={t('channelGroupAlias')}
+                                className="rounded-xl flex-1"
+                            />
+                            <Select
+                                value={String(group.mode)}
+                                onValueChange={(value) =>
+                                    handleUpdateChannelGroup(groupIdx, { mode: Number(value) as ChannelGroup['mode'] })
+                                }
+                            >
+                                <SelectTrigger id={`${idPrefix}-channel-group-mode-${groupIdx}`} className="rounded-xl w-32 shrink-0 border border-border px-3 py-2 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent className='rounded-xl'>
+                                    <SelectItem className='rounded-xl' value={String(GroupMode.Weighted)}>{t('channelGroupModeWeighted')}</SelectItem>
+                                    <SelectItem className='rounded-xl' value={String(GroupMode.Failover)}>{t('channelGroupModeFailover')}</SelectItem>
+                                </SelectContent>
+                            </Select>
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleRemoveChannelGroup(groupIdx)}
+                                className="h-8 w-8 p-0 rounded-xl text-muted-foreground hover:text-destructive hover:bg-transparent"
+                                title={t('channelGroupRemove')}
+                            >
+                                <X className="h-4 w-4" />
+                            </Button>
+                        </div>
+                        <div className="space-y-1.5">
+                            {(group.items ?? []).map((item, itemIdx) => (
+                                <div key={`channel-group-${groupIdx}-item-${itemIdx}`} className="flex items-center gap-2">
+                                    <Input
+                                        type="text"
+                                        value={item.model}
+                                        onChange={(e) => handleUpdateChannelGroupItem(groupIdx, itemIdx, { model: e.target.value })}
+                                        placeholder={t('channelGroupModel')}
+                                        className="rounded-xl flex-1"
+                                    />
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        value={item.weight}
+                                        onChange={(e) =>
+                                            handleUpdateChannelGroupItem(groupIdx, itemIdx, {
+                                                weight: Math.max(1, parseInt(e.target.value) || 1),
+                                            })
+                                        }
+                                        placeholder={t('channelGroupWeight')}
+                                        title={t('channelGroupWeight')}
+                                        className="rounded-xl w-16 shrink-0"
+                                    />
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        value={item.priority}
+                                        onChange={(e) =>
+                                            handleUpdateChannelGroupItem(groupIdx, itemIdx, {
+                                                priority: Math.max(0, parseInt(e.target.value) || 0),
+                                            })
+                                        }
+                                        placeholder={t('channelGroupPriority')}
+                                        title={t('channelGroupPriority')}
+                                        className="rounded-xl w-16 shrink-0"
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleRemoveChannelGroupItem(groupIdx, itemIdx)}
+                                        className="h-8 w-8 p-0 rounded-xl text-muted-foreground hover:text-destructive hover:bg-transparent"
+                                        title={t('channelGroupRemoveItem')}
+                                    >
+                                        <X className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                            ))}
+                        </div>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleAddChannelGroupItem(groupIdx)}
+                            className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
+                        >
+                            <Plus className="h-3 w-3 mr-1" />
+                            {t('channelGroupAddItem')}
+                        </Button>
+                    </div>
+                ))}
             </div>
 
             <div className="space-y-2">

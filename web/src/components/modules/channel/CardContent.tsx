@@ -62,6 +62,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         tags: channel.tags ?? [],
         model_redirects: channel.model_redirects ?? [],
         model_redirect_only: channel.model_redirect_only ?? false,
+        channel_groups: channel.channel_groups ?? [],
         auto_sync: channel.auto_sync,
         force_deep_seek_thinking: channel.force_deep_seek_thinking ?? false,
         probe_enabled: channel.probe_enabled ?? false,
@@ -83,6 +84,17 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         redirects
             .map((r) => ({ model: r.model.trim(), target_model: r.target_model.trim() }))
             .filter((r) => r.model && r.target_model);
+
+    const normalizeChannelGroups = (groups: NonNullable<Channel['channel_groups']>) =>
+        groups
+            .map((g) => ({
+                alias: g.alias.trim(),
+                mode: g.mode,
+                items: (g.items ?? [])
+                    .map((it) => ({ model: it.model.trim(), priority: Number(it.priority) || 0, weight: Number(it.weight) || 1 }))
+                    .filter((it) => it.model),
+            }))
+            .filter((g) => g.alias && g.items.length > 0);
 
     const handleUpdate = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -109,6 +121,10 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         }
         if ((formData.model_redirect_only ?? false) !== (channel.model_redirect_only ?? false)) {
             req.model_redirect_only = formData.model_redirect_only;
+        }
+        const nextChannelGroups = normalizeChannelGroups(formData.channel_groups ?? []);
+        if (JSON.stringify(nextChannelGroups) !== JSON.stringify(normalizeChannelGroups(channel.channel_groups ?? []))) {
+            req.channel_groups = nextChannelGroups;
         }
         if (formData.proxy_mode === 'pool' && !formData.proxy_config_id) {
             toast.error(tProxy('selectRequired'));

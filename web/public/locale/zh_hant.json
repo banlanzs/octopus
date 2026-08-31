@@ -1039,6 +1039,18 @@
             "modelRedirectRemove": "移除重定向",
             "modelRedirectOnly": "僅暴露別名模型",
             "modelRedirectOnlyHint": "開啟後，渠道設定的原始模型不會出現在 /v1/models 與渠道模型列表中。",
+            "channelGroups": "模型分組",
+            "channelGroupAdd": "新增分組",
+            "channelGroupHint": "出口別名 → 渠道內多模型調度：請求別名時，在條目模型間按模式分發（僅對限定該渠道的 API Key 生效）。",
+            "channelGroupAlias": "出口別名（對外暴露）",
+            "channelGroupModeWeighted": "加權",
+            "channelGroupModeFailover": "故障轉移",
+            "channelGroupModel": "模型名稱",
+            "channelGroupWeight": "權重",
+            "channelGroupPriority": "優先級",
+            "channelGroupRemove": "移除分組",
+            "channelGroupRemoveItem": "移除模型條目",
+            "channelGroupAddItem": "新增模型條目",
             "tags": "標籤",
             "tagsPlaceholder": "輸入標籤後按 Enter"
         }

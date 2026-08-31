@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger';
 import { formatCount, formatMoney, formatTime } from '@/lib/utils';
 import { StatsChannel, type StatsMetricsFormatted } from './stats';
 import type { ProxyMode } from './proxy-pool';
+import { GroupMode } from './group';
 /**
  * 渠道类型枚举
  */
@@ -44,6 +45,22 @@ export type ModelRedirect = {
     target_model: string;
 };
 
+/**
+ * 渠道级分组：出口别名 → 渠道内多模型的调度列表。
+ * 仅支持 Failover（优先级）与 Weighted（权重）两种模式。
+ */
+export type ChannelGroupItem = {
+    model: string;
+    priority: number;
+    weight: number;
+};
+
+export type ChannelGroup = {
+    alias: string;
+    mode: GroupMode.Failover | GroupMode.Weighted;
+    items: ChannelGroupItem[];
+};
+
 export type ChannelKey = {
     id: number;
     channel_id: number;
@@ -77,6 +94,7 @@ export type Channel = {
     tags: string[];
     model_redirects: ModelRedirect[];
     model_redirect_only: boolean;
+    channel_groups: ChannelGroup[];
     proxy_mode: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync: boolean;
@@ -95,12 +113,13 @@ export type Channel = {
 };
 
 // Internal type: backend may return null for slice fields; normalize to [] in select()
-type ChannelServer = Omit<Channel, 'base_urls' | 'custom_header' | 'keys' | 'tags' | 'model_redirects'> & {
+type ChannelServer = Omit<Channel, 'base_urls' | 'custom_header' | 'keys' | 'tags' | 'model_redirects' | 'channel_groups'> & {
     base_urls: BaseUrl[] | null;
     custom_header: CustomHeader[] | null;
     keys: ChannelKey[] | null;
     tags: string[] | null;
     model_redirects: ModelRedirect[] | null;
+    channel_groups: ChannelGroup[] | null;
 };
 
 /**
@@ -117,6 +136,7 @@ export type CreateChannelRequest = {
     tags?: string[];
     model_redirects?: ModelRedirect[];
     model_redirect_only?: boolean;
+    channel_groups?: ChannelGroup[];
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync?: boolean;
@@ -145,6 +165,7 @@ export type UpdateChannelRequest = {
     tags?: string[];
     model_redirects?: ModelRedirect[];
     model_redirect_only?: boolean;
+    channel_groups?: ChannelGroup[];
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync?: boolean;
@@ -247,6 +268,7 @@ export function useChannelList() {
                 tags: item.tags ?? [],
                 model_redirects: item.model_redirects ?? [],
                 model_redirect_only: item.model_redirect_only ?? false,
+                channel_groups: item.channel_groups ?? [],
                 proxy_mode: item.proxy_mode ?? 'direct',
                 proxy_config_id: item.proxy_config_id ?? null,
                 scheduling_exempt: item.scheduling_exempt ?? false,

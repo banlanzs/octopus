@@ -28,6 +28,7 @@ export function CreateDialogContent() {
         tags: [],
         model_redirects: [],
         model_redirect_only: false,
+        channel_groups: [],
         auto_sync: false,
         force_deep_seek_thinking: false,
         probe_enabled: false,
@@ -71,6 +72,15 @@ export function CreateDialogContent() {
                     .map((r) => ({ model: r.model.trim(), target_model: r.target_model.trim() }))
                     .filter((r) => r.model && r.target_model),
                 model_redirect_only: formData.model_redirect_only,
+                channel_groups: (formData.channel_groups ?? [])
+                    .map((g) => ({
+                        alias: g.alias.trim(),
+                        mode: g.mode,
+                        items: (g.items ?? [])
+                            .map((it) => ({ model: it.model.trim(), priority: Number(it.priority) || 0, weight: Number(it.weight) || 1 }))
+                            .filter((it) => it.model),
+                    }))
+                    .filter((g) => g.alias && g.items.length > 0),
                 proxy_mode: formData.proxy_mode,
                 proxy_config_id: formData.proxy_mode === 'pool' ? formData.proxy_config_id : null,
                 auto_sync: formData.auto_sync,
@@ -100,6 +110,7 @@ export function CreateDialogContent() {
                         tags: [],
                         model_redirects: [],
                         model_redirect_only: false,
+                        channel_groups: [],
                         auto_sync: false,
                         force_deep_seek_thinking: false,
                         probe_enabled: false,

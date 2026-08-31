@@ -1039,6 +1039,18 @@
             "modelRedirectRemove": "Remove redirect",
             "modelRedirectOnly": "Only expose alias models",
             "modelRedirectOnlyHint": "When enabled, the original models configured on the channel are hidden from /v1/models and channel model lists.",
+            "channelGroups": "Model Groups",
+            "channelGroupAdd": "Add Group",
+            "channelGroupHint": "Export alias → multi-model scheduling within the channel: requests to the alias are distributed across item models by mode (only effective for API keys restricted to this channel).",
+            "channelGroupAlias": "Export alias (exposed to clients)",
+            "channelGroupModeWeighted": "Weighted",
+            "channelGroupModeFailover": "Failover",
+            "channelGroupModel": "Model name",
+            "channelGroupWeight": "Weight",
+            "channelGroupPriority": "Priority",
+            "channelGroupRemove": "Remove group",
+            "channelGroupRemoveItem": "Remove model item",
+            "channelGroupAddItem": "Add model item",
             "tags": "Tags",
             "tagsPlaceholder": "Type a tag and press Enter"
         }
