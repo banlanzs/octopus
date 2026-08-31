@@ -9,6 +9,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -72,6 +73,68 @@ import {
     AccordionItem,
     AccordionTrigger,
 } from "@/components/ui/accordion";
+
+// ModelCombobox 模型名输入框：聚焦时弹出已拉取模型候选列表，点击填入；
+// 候选列表外仍可手动输入任意模型名。
+function ModelCombobox({
+    value,
+    onChange,
+    candidates,
+    placeholder,
+}: {
+    value: string;
+    onChange: (value: string) => void;
+    candidates: string[];
+    placeholder?: string;
+}) {
+    const t = useTranslations('channel.form');
+    const [open, setOpen] = useState(false);
+    const normalized = value.trim().toLowerCase();
+    const matches = candidates.filter((c) => c.trim().toLowerCase().includes(normalized));
+
+    return (
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+                <div className="flex-1">
+                    <Input
+                        type="text"
+                        value={value}
+                        onChange={(e) => onChange(e.target.value)}
+                        onFocus={() => setOpen(true)}
+                        placeholder={placeholder}
+                        className="rounded-xl w-full"
+                    />
+                </div>
+            </PopoverTrigger>
+            <PopoverContent
+                align="start"
+                sideOffset={4}
+                className="w-64 p-1.5 max-h-56 overflow-y-auto"
+                onOpenAutoFocus={(e) => e.preventDefault()}
+            >
+                {matches.length > 0 ? (
+                    matches.map((c) => (
+                        <button
+                            key={c}
+                            type="button"
+                            onClick={() => {
+                                onChange(c);
+                                setOpen(false);
+                            }}
+                            className="w-full text-left px-2.5 py-1.5 rounded-lg text-sm text-foreground hover:bg-accent hover:text-accent-foreground transition-colors truncate"
+                        >
+                            {c}
+                        </button>
+                    ))
+                ) : (
+                    <div className="px-2.5 py-1.5 text-xs text-muted-foreground">
+                        {candidates.length === 0 ? t('modelPickEmpty') : t('modelPickNoMatch')}
+                    </div>
+                )}
+            </PopoverContent>
+        </Popover>
+    );
+}
 
 export function ChannelForm({
     formData,
@@ -294,6 +357,10 @@ export function ChannelForm({
         );
         onFormDataChange({ ...formData, channel_groups: next });
     };
+
+    // 供"模型重定向上游模型"与"模型分组条目模型"使用的候选列表：
+    // 已拉取的自动模型 + 手动添加模型；仍保留手动输入（候选列表外可自由填写）。
+    const modelCandidates = selectedModels;
 
     const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === 'Enter') {
@@ -740,12 +807,11 @@ export function ChannelForm({
                                     className="rounded-xl flex-1"
                                 />
                                 <span className="text-xs text-muted-foreground shrink-0">→</span>
-                                <Input
-                                    type="text"
+                                <ModelCombobox
                                     value={redirect.target_model}
-                                    onChange={(e) => handleUpdateRedirect(idx, { target_model: e.target.value })}
+                                    onChange={(value) => handleUpdateRedirect(idx, { target_model: value })}
+                                    candidates={modelCandidates}
                                     placeholder={t('modelRedirectTarget')}
-                                    className="rounded-xl flex-1"
                                 />
                                 <Button
                                     type="button"
@@ -824,12 +890,11 @@ export function ChannelForm({
                         <div className="space-y-1.5">
                             {(group.items ?? []).map((item, itemIdx) => (
                                 <div key={`channel-group-${groupIdx}-item-${itemIdx}`} className="flex items-center gap-2">
-                                    <Input
-                                        type="text"
+                                    <ModelCombobox
                                         value={item.model}
-                                        onChange={(e) => handleUpdateChannelGroupItem(groupIdx, itemIdx, { model: e.target.value })}
+                                        onChange={(value) => handleUpdateChannelGroupItem(groupIdx, itemIdx, { model: value })}
+                                        candidates={modelCandidates}
                                         placeholder={t('channelGroupModel')}
-                                        className="rounded-xl flex-1"
                                     />
                                     <Input
                                         type="number"

@@ -1051,6 +1051,8 @@
             "channelGroupRemove": "移除分組",
             "channelGroupRemoveItem": "移除模型條目",
             "channelGroupAddItem": "新增模型條目",
+            "modelPickEmpty": "暫無已拉取的模型，請先點擊「刷新模型」",
+            "modelPickNoMatch": "無匹配模型",
             "tags": "標籤",
             "tagsPlaceholder": "輸入標籤後按 Enter"
         }

@@ -1051,6 +1051,8 @@
             "channelGroupRemove": "Remove group",
             "channelGroupRemoveItem": "Remove model item",
             "channelGroupAddItem": "Add model item",
+            "modelPickEmpty": "No models fetched yet — click \"Refresh models\" first",
+            "modelPickNoMatch": "No matching models",
             "tags": "Tags",
             "tagsPlaceholder": "Type a tag and press Enter"
         }
