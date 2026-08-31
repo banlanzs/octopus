@@ -1208,3 +1208,80 @@ func TestTextHandlerTagRouteBypassesGroupAndAppliesModelRedirect(t *testing.T) {
 		t.Fatalf("upstream model not redirected: %s", body)
 	}
 }
+
+func TestTextHandlerChannelGroupFailoverEndToEnd(t *testing.T) {
+	if dbpkg.GetDB() != nil {
+		_ = dbpkg.Close()
+	}
+	dbPath := filepath.Join(t.TempDir(), "textrelay-channel-group-failover.db")
+	if err := dbpkg.InitDB("sqlite", dbPath, false); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbpkg.Close() })
+
+	// 单一上游按模型名区分：primary-model 返回 500，backup-model 返回 200。
+	// 验证优先级降级确实切换了模型名（而不是仅换 base url）。
+	var primaryHits, backupHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		switch req["model"] {
+		case "primary-model":
+			primaryHits.Add(1)
+			http.Error(w, "primary always fails", http.StatusInternalServerError)
+		case "backup-model":
+			backupHits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"chatcmpl-backup","object":"chat.completion","model":"backup-model","choices":[{"index":0,"message":{"role":"assistant","content":"backup ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}`))
+		default:
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+		}
+	}))
+	defer upstream.Close()
+
+	ctx := context.Background()
+	channel := &model.Channel{
+		Name:     "textrelay-cg-failover-channel",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: upstream.URL}},
+		Model:    "primary-model,backup-model",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "cg-key"}},
+		ChannelGroups: []model.ChannelGroup{
+			{
+				Alias: "unified",
+				Mode:  model.GroupModeFailover,
+				Items: []model.ChannelGroupItem{
+					{Model: "primary-model", Priority: 1, Weight: 1},
+					{Model: "backup-model", Priority: 2, Weight: 1},
+				},
+			},
+		},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+
+	recorder, c := newTextRelayGinContext(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"unified","messages":[{"role":"user","content":"hi"}]}`)
+	c.Set("supported_channels", fmt.Sprintf("%d", channel.ID))
+
+	TextHandler(llm.APIFormatOpenAIChatCompletion, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", recorder.Code, recorder.Body.String())
+	}
+	if primaryHits.Load() == 0 {
+		t.Fatalf("primary model got 0 requests, want failover to try it first")
+	}
+	if backupHits.Load() == 0 {
+		t.Fatalf("backup upstream got 0 requests, want failover to reach it after primary 500")
+	}
+	if !strings.Contains(recorder.Body.String(), "backup ok") {
+		t.Fatalf("response body = %s, want backup upstream content", recorder.Body.String())
+	}
+}

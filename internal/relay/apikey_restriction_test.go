@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -193,4 +194,94 @@ func TestGroupForAPIKeyRequestFiltersRedirectOnlyOriginalGroupItems(t *testing.T
 	if len(originalGroup.Items) != 0 {
 		t.Fatalf("original group items = %v, want empty", originalGroup.Items)
 	}
+}
+
+func TestGroupForAPIKeyRequestExpandsChannelGroup(t *testing.T) {
+	ctx := setupRelayTestDB(t)
+
+	channel := &dbmodel.Channel{
+		Name:    "channel-group-channel",
+		Type:    0,
+		Enabled: true,
+		Model:   "gpt-4o,gpt-4o-mini",
+		ChannelGroups: []dbmodel.ChannelGroup{
+			{
+				Alias: "unified",
+				Mode:  dbmodel.GroupModeWeighted,
+				Items: []dbmodel.ChannelGroupItem{
+					{Model: "gpt-4o", Priority: 1, Weight: 3},
+					{Model: "gpt-4o-mini", Priority: 2, Weight: 1},
+				},
+			},
+			{
+				Alias: "fallback-alias",
+				Mode:  dbmodel.GroupModeFailover,
+				Items: []dbmodel.ChannelGroupItem{
+					{Model: "gpt-4o", Priority: 1, Weight: 1},
+				},
+			},
+		},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+
+	t.Run("weighted alias expands to multi-model items", func(t *testing.T) {
+		group, direct, err := groupForAPIKeyRequest("unified", fmt.Sprintf("%d", channel.ID), ctx)
+		if err != nil {
+			t.Fatalf("groupForAPIKeyRequest(unified) failed: %v", err)
+		}
+		if !direct {
+			t.Fatalf("channel group route should be direct")
+		}
+		if group.Mode != dbmodel.GroupModeWeighted {
+			t.Fatalf("mode = %v, want weighted", group.Mode)
+		}
+		if len(group.Items) != 2 {
+			t.Fatalf("items = %v, want 2 items", group.Items)
+		}
+		for i, item := range group.Items {
+			if item.ChannelID != channel.ID {
+				t.Fatalf("item[%d].ChannelID = %d, want %d", i, item.ChannelID, channel.ID)
+			}
+		}
+		if group.Items[0].ModelName != "gpt-4o" || group.Items[0].Weight != 3 {
+			t.Fatalf("item[0] = %+v, want gpt-4o weight=3", group.Items[0])
+		}
+		if group.Items[1].ModelName != "gpt-4o-mini" || group.Items[1].Weight != 1 {
+			t.Fatalf("item[1] = %+v, want gpt-4o-mini weight=1", group.Items[1])
+		}
+	})
+
+	t.Run("failover alias passes mode through", func(t *testing.T) {
+		group, _, err := groupForAPIKeyRequest("fallback-alias", fmt.Sprintf("%d", channel.ID), ctx)
+		if err != nil {
+			t.Fatalf("groupForAPIKeyRequest(fallback-alias) failed: %v", err)
+		}
+		if group.Mode != dbmodel.GroupModeFailover {
+			t.Fatalf("mode = %v, want failover", group.Mode)
+		}
+		if len(group.Items) != 1 || group.Items[0].ModelName != "gpt-4o" || group.Items[0].Priority != 1 {
+			t.Fatalf("items = %+v, want single gpt-4o priority=1", group.Items)
+		}
+	})
+
+	t.Run("alias not in group falls back to direct channel model", func(t *testing.T) {
+		group, direct, err := groupForAPIKeyRequest("gpt-4o-mini", fmt.Sprintf("%d", channel.ID), ctx)
+		if err != nil {
+			t.Fatalf("groupForAPIKeyRequest(gpt-4o-mini) failed: %v", err)
+		}
+		if !direct {
+			t.Fatalf("direct model route should be direct")
+		}
+		if len(group.Items) != 1 || group.Items[0].ModelName != "gpt-4o-mini" {
+			t.Fatalf("items = %+v, want single direct gpt-4o-mini", group.Items)
+		}
+	})
+
+	t.Run("alias does not leak to unrestricted keys without group table entry", func(t *testing.T) {
+		if _, _, err := groupForAPIKeyRequest("unified", "", ctx); err == nil {
+			t.Fatalf("groupForAPIKeyRequest(unified, unrestricted) = nil error, want group not found (alias must not leak)")
+		}
+	})
 }

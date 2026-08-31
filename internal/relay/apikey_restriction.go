@@ -105,8 +105,10 @@ func fallbackGroupForAPIKeyChannels(requestModel, supportedChannels string, ctx 
 }
 
 // fallbackGroupForAllowedChannels 为给定渠道 ID 集合构造直连临时分组。
-// 只使用渠道自身暴露的模型（遵守 ModelRedirectOnly），不读取分组路由。
-// GroupItem.ModelName 保持为客户端请求模型名，转发循环内再按渠道
+// 渠道级分组优先：请求模型命中某渠道的 ChannelGroup 别名时，展开为
+// 该渠道内的多模型条目（沿用分组的 Mode/Priority/Weight）；
+// 未命中时回退为渠道暴露模型（含重定向别名，遵守 ModelRedirectOnly）的单条目直连。
+// GroupItem.ModelName 保持为客户端请求模型名或分组条目模型名，转发循环内再按渠道
 // 重定向配置解析为上游实际模型，避免重定向链被重复解析。
 func fallbackGroupForAllowedChannels(requestModel string, allowed map[int]struct{}, ctx context.Context) (dbmodel.Group, bool) {
 	channels, err := op.ChannelList(ctx)
@@ -116,11 +118,29 @@ func fallbackGroupForAllowedChannels(requestModel string, allowed map[int]struct
 	sort.Slice(channels, func(i, j int) bool { return channels[i].ID < channels[j].ID })
 
 	group := dbmodel.Group{Mode: dbmodel.GroupModeFailover}
+	groupModeSet := false
 	for _, channel := range channels {
 		if !channel.Enabled {
 			continue
 		}
 		if _, ok := allowed[channel.ID]; !ok {
+			continue
+		}
+		// 渠道级分组优先：别名命中时展开为多模型条目。
+		// 多个渠道的分组同名命中时取第一个分组的 Mode。
+		if cg, ok := channel.ChannelGroupForAlias(requestModel); ok {
+			if !groupModeSet {
+				group.Mode = cg.Mode
+				groupModeSet = true
+			}
+			for _, cgItem := range cg.Items {
+				group.Items = append(group.Items, dbmodel.GroupItem{
+					ChannelID: channel.ID,
+					ModelName: cgItem.Model,
+					Priority:  cgItem.Priority,
+					Weight:    cgItem.Weight,
+				})
+			}
 			continue
 		}
 		if !channel.IsModelExposed(requestModel) {
